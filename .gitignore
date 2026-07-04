@@ -5,3 +5,5 @@ obj/*
 !obj/.gitkeep
 
 *.o
+
+ref/
