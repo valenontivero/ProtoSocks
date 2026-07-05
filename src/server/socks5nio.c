@@ -14,7 +14,7 @@
 #include <arpa/inet.h>
 
 #include "hello.h"
-// #include "request.h"
+#include "request.h"
 #include "buffer.h"
 
 #include "selector.h"
@@ -52,6 +52,10 @@ enum socks_v5state {
      *   - ERROR        ante cualquier error (IO/parseo)
      */
     HELLO_WRITE,
+
+    REQUEST_READ,
+
+    REQUEST_WRITE,
 
     // estados terminales
     DONE,
@@ -92,8 +96,15 @@ struct hello_st {
     uint8_t               method;
 } ;
 
+/** usado por REQUEST_READ, REQUEST_WRITE */
+struct request_st {
+    buffer                  *rb, *wb;
+    struct request_parser    parser;
+    uint8_t                  reply;
+};
+
 /*
- * Representa una conexion socks5 completa. 
+ * Representa una conexion socks5 completa.
  * Si bien cada estado tiene su propio struct que le da un alcance
  * acotado, disponemos de la siguiente estructura para hacer una única
  * alocación cuando recibimos la conexión.
@@ -126,7 +137,7 @@ struct socks5 {
     /** estados para el client_fd */
     union {
         struct hello_st hello;
-        // struct request_st request;
+        struct request_st request;
         // struct copy       copy;
     } client;
 
@@ -187,7 +198,7 @@ socksv5_pool_destroy(void) {
 /** obtiene el struct (socks5 *) desde la llave de selección  */
 #define ATTACHMENT(key) ( (struct socks5 *)(key)->data)
 
-static const struct state_definition client_statbl[4];
+static const struct state_definition client_statbl[6];
 
 /* declaración forward de los handlers de selección de una conexión
  * establecida entre un cliente y el proxy.
@@ -300,7 +311,7 @@ on_hello_method(struct hello_parser *p, const uint8_t method) {
     }
 }
 
-/** inicializa las variables de los estados HELLO_… */
+/** inicializa las variables de los estados HELLO_.../ */
 static void
 hello_read_init(const unsigned state, struct selector_key *key) {
     struct hello_st *d = &ATTACHMENT(key)->client.hello;
@@ -329,7 +340,7 @@ hello_read(struct selector_key *key) {
 
     // Se utiliza para recibir datos desde un socket conectado o no conectado
     n = recv(key->fd, ptr, count, 0);
-    
+
     if(n > 0) {
         buffer_write_adv(d->rb, n);
         const enum hello_state st = hello_consume(d->rb, &d->parser, &error);
@@ -355,9 +366,6 @@ hello_process(const struct hello_st* d) {
     uint8_t m = d->method;
     const uint8_t r = (m == SOCKS_HELLO_NO_ACCEPTABLE_METHODS) ? 0xFF : 0x00;
     if (-1 == hello_marshall(d->wb, r)) {
-        ret  = ERROR;
-    }
-    if (SOCKS_HELLO_NO_ACCEPTABLE_METHODS == m) {
         ret  = ERROR;
     }
     return ret;
@@ -387,15 +395,108 @@ hello_write(struct selector_key *key) {
     if(n > 0) {
         buffer_read_adv(d->wb, n);
         if(!buffer_can_read(d->wb)) {
-            // Handshake completo.
-            // Para este primer paso funcional, cerramos la conexión de forma limpia.
-            if(SELECTOR_SUCCESS == selector_set_interest_key(key, OP_READ)) {
+            if(d->method == SOCKS_HELLO_NO_ACCEPTABLE_METHODS) {
                 ret = DONE;
+            } else if(SELECTOR_SUCCESS == selector_set_interest_key(key, OP_READ)) {
+                ret = REQUEST_READ;
             } else {
                 ret = ERROR;
             }
         }
     } else {
+        ret = ERROR;
+    }
+
+    return ret;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// REQUEST
+////////////////////////////////////////////////////////////////////////////////
+
+static void
+request_read_init(const unsigned state, struct selector_key *key) {
+    struct request_st *d = &ATTACHMENT(key)->client.request;
+
+    (void) state;
+    d->rb    = &(ATTACHMENT(key)->read_buffer);
+    d->wb    = &(ATTACHMENT(key)->write_buffer);
+    d->reply = SOCKS_REPLY_GENERAL_FAILURE;
+    request_parser_init(&d->parser);
+}
+
+static unsigned
+request_process(struct request_st *d) {
+    unsigned ret = REQUEST_WRITE;
+
+    d->reply = request_reply_for(&d->parser);
+    if(request_marshall(d->wb, d->reply) < 0) {
+        ret = ERROR;
+    }
+    return ret;
+}
+
+static unsigned
+request_read(struct selector_key *key) {
+    struct request_st *d = &ATTACHMENT(key)->client.request;
+    unsigned  ret        = REQUEST_READ;
+        bool  error      = false;
+     uint8_t *ptr;
+      size_t  count;
+     ssize_t  n;
+
+    ptr = buffer_write_ptr(d->rb, &count);
+    n = recv(key->fd, ptr, count, 0);
+
+    if(n > 0) {
+        buffer_write_adv(d->rb, n);
+        const enum request_state st = request_consume(d->rb, &d->parser, &error);
+        if(request_is_done(st, 0)) {
+            if(SELECTOR_SUCCESS == selector_set_interest_key(key, OP_WRITE)) {
+                ret = request_process(d);
+            } else {
+                ret = ERROR;
+            }
+        }
+    } else if(n == 0) {
+        ret = ERROR;
+    } else if(errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+        ret = ERROR;
+    }
+
+    return error ? ERROR : ret;
+}
+
+static void
+request_read_close(const unsigned state, struct selector_key *key) {
+    (void) state;
+    (void) key;
+}
+
+static void
+request_write_close(const unsigned state, struct selector_key *key) {
+    (void) state;
+    (void) key;
+}
+
+static unsigned
+request_write(struct selector_key *key) {
+    struct request_st *d = &ATTACHMENT(key)->client.request;
+    unsigned  ret        = REQUEST_WRITE;
+    uint8_t  *ptr;
+    size_t    count;
+    ssize_t   n;
+
+    ptr = buffer_read_ptr(d->wb, &count);
+    n = send(key->fd, ptr, count, MSG_NOSIGNAL);
+    if(n > 0) {
+        buffer_read_adv(d->wb, n);
+        if(!buffer_can_read(d->wb)) {
+            ret = DONE;
+        }
+    } else if(n == 0) {
+        ret = ERROR;
+    } else if(errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
         ret = ERROR;
     }
 
@@ -414,6 +515,18 @@ static const struct state_definition client_statbl[] = {
         .on_arrival       = NULL,
         .on_departure     = hello_write_close,
         .on_write_ready   = hello_write,
+    },
+    {
+        .state            = REQUEST_READ,
+        .on_arrival       = request_read_init,
+        .on_departure     = request_read_close,
+        .on_read_ready    = request_read,
+    },
+    {
+        .state            = REQUEST_WRITE,
+        .on_arrival       = NULL,
+        .on_departure     = request_write_close,
+        .on_write_ready   = request_write,
     },
     {
         .state            = DONE,
