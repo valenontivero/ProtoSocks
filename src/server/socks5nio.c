@@ -57,6 +57,8 @@ enum socks_v5state {
 
     REQUEST_READ,
 
+    RESOLVING,
+
     CONNECTING,
 
     REQUEST_WRITE,
@@ -127,6 +129,7 @@ struct socks5 {
     /** Resolucion de direccion de origen */
     struct addrinfo *origin_resolution;
     struct addrinfo *origin_resolution_current;
+    int              origin_resolution_error;
 
     /** File descriptor del origen */
     int origin_fd;
@@ -204,7 +207,7 @@ socksv5_pool_destroy(void) {
 /** obtiene el struct (socks5 *) desde la llave de selección  */
 #define ATTACHMENT(key) ( (struct socks5 *)(key)->data)
 
-static const struct state_definition client_statbl[8];
+static const struct state_definition client_statbl[9];
 
 /* declaración forward de los handlers de selección de una conexión
  * establecida entre un cliente y el proxy.
@@ -443,29 +446,129 @@ request_set_reply(struct selector_key *key, struct request_st *d, const uint8_t 
     return REQUEST_WRITE;
 }
 
-static int
-request_connect_ipv4(struct selector_key *key, const struct request_parser *p, bool *in_progress) {
+struct resolver_args {
+    struct socks5 *state;
+    fd_selector selector;
+    int client_fd;
+    char host[SOCKS_REQUEST_MAX_DOMAIN + 1];
+    char service[6];
+};
+
+static void *
+resolver_thread(void *data) {
+    struct resolver_args *args = data;
+    struct addrinfo hints;
+    struct addrinfo *result = NULL;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    args->state->origin_resolution_error = getaddrinfo(args->host, args->service,
+                                                       &hints, &result);
+    args->state->origin_resolution = result;
+    args->state->origin_resolution_current = result;
+
+    selector_notify_block(args->selector, args->client_fd);
+    socks5_destroy(args->state);
+    free(args);
+    return NULL;
+}
+
+static unsigned
+request_start_resolution(struct selector_key *key, struct request_st *d) {
     struct socks5 *s = ATTACHMENT(key);
-    struct sockaddr_in addr;
+    struct resolver_args *args = malloc(sizeof(*args));
+    pthread_t tid;
+
+    if(args == NULL) {
+        return request_set_reply(key, d, SOCKS_REPLY_GENERAL_FAILURE);
+    }
+
+    memset(args, 0, sizeof(*args));
+    args->state = s;
+    args->selector = key->s;
+    args->client_fd = s->client_fd;
+    memcpy(args->host, d->parser.domain, d->parser.domain_len + 1);
+    snprintf(args->service, sizeof(args->service), "%u", d->parser.port);
+
+    s->references++;
+    if(pthread_create(&tid, NULL, resolver_thread, args) != 0) {
+        s->references--;
+        free(args);
+        return request_set_reply(key, d, SOCKS_REPLY_GENERAL_FAILURE);
+    }
+    pthread_detach(tid);
+
+    if(SELECTOR_SUCCESS != selector_set_interest(key->s, s->client_fd, OP_NOOP)) {
+        return ERROR;
+    }
+    return RESOLVING;
+}
+
+static uint8_t
+request_reply_for_connect_error(const int error) {
+    switch(error) {
+        case ENETUNREACH:
+            return SOCKS_REPLY_NETWORK_UNREACHABLE;
+        case EHOSTUNREACH:
+            return SOCKS_REPLY_HOST_UNREACHABLE;
+        case ECONNREFUSED:
+            return SOCKS_REPLY_CONNECTION_REFUSED;
+        default:
+            return SOCKS_REPLY_GENERAL_FAILURE;
+    }
+}
+
+static int
+request_build_sockaddr(const struct request_parser *p, struct sockaddr_storage *storage,
+                       socklen_t *storage_len) {
+    memset(storage, 0, sizeof(*storage));
+
+    if(p->atyp == SOCKS_REQUEST_ATYP_IPV4) {
+        struct sockaddr_in *addr = (struct sockaddr_in *) storage;
+        addr->sin_family = AF_INET;
+        addr->sin_port = htons(p->port);
+        memcpy(&addr->sin_addr.s_addr, p->addr, 4);
+        *storage_len = sizeof(*addr);
+        return AF_INET;
+    }
+
+    if(p->atyp == SOCKS_REQUEST_ATYP_IPV6) {
+        struct sockaddr_in6 *addr = (struct sockaddr_in6 *) storage;
+        addr->sin6_family = AF_INET6;
+        addr->sin6_port = htons(p->port);
+        memcpy(&addr->sin6_addr.s6_addr, p->addr, 16);
+        *storage_len = sizeof(*addr);
+        return AF_INET6;
+    }
+
+    return -1;
+}
+
+static int
+request_connect_sockaddr(struct selector_key *key, const int family,
+                         const struct sockaddr *addr, const socklen_t addr_len,
+                         bool *in_progress, int *connect_error) {
+    struct socks5 *s = ATTACHMENT(key);
     int fd;
     int ret;
 
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(p->port);
-    memcpy(&addr.sin_addr.s_addr, p->addr, 4);
-
-    fd = socket(AF_INET, SOCK_STREAM, 0);
+    fd = socket(family, SOCK_STREAM, 0);
     if(fd < 0) {
+        *connect_error = errno;
         return -1;
     }
     if(selector_fd_set_nio(fd) < 0) {
+        *connect_error = errno;
         close(fd);
         return -1;
     }
 
-    ret = connect(fd, (struct sockaddr *) &addr, sizeof(addr));
+    ret = connect(fd, addr, addr_len);
     if(ret < 0 && errno != EINPROGRESS) {
+        *connect_error = errno;
         close(fd);
         return -1;
     }
@@ -475,6 +578,7 @@ request_connect_ipv4(struct selector_key *key, const struct request_parser *p, b
     s->references++;
     if(SELECTOR_SUCCESS != selector_register(key->s, fd, &socks5_handler,
                                              *in_progress ? OP_WRITE : OP_NOOP, s)) {
+        *connect_error = errno;
         s->references--;
         s->origin_fd = -1;
         close(fd);
@@ -485,20 +589,69 @@ request_connect_ipv4(struct selector_key *key, const struct request_parser *p, b
 }
 
 static int
-request_marshall_origin_bind(struct socks5 *s, struct request_st *d) {
-    struct sockaddr_in addr;
-    socklen_t addr_len = sizeof(addr);
-    uint8_t bind_addr[4] = { 0x00, 0x00, 0x00, 0x00 };
-    uint16_t bind_port = 0;
+request_connect_ip(struct selector_key *key, const struct request_parser *p,
+                   bool *in_progress, int *connect_error) {
+    struct sockaddr_storage addr;
+    socklen_t addr_len;
+    int family;
 
-    memset(&addr, 0, sizeof(addr));
-    if(getsockname(s->origin_fd, (struct sockaddr *) &addr, &addr_len) == 0
-            && addr.sin_family == AF_INET) {
-        memcpy(bind_addr, &addr.sin_addr.s_addr, sizeof(bind_addr));
-        bind_port = ntohs(addr.sin_port);
+    *connect_error = 0;
+    family = request_build_sockaddr(p, &addr, &addr_len);
+    if(family < 0) {
+        *connect_error = EAFNOSUPPORT;
+        return -1;
     }
 
-    return request_marshall_ipv4(d->wb, d->reply, bind_addr, bind_port);
+    return request_connect_sockaddr(key, family, (struct sockaddr *) &addr,
+                                    addr_len, in_progress, connect_error);
+}
+
+static int
+request_connect_next_resolution(struct selector_key *key, bool *in_progress,
+                                int *connect_error) {
+    struct socks5 *s = ATTACHMENT(key);
+
+    *connect_error = EHOSTUNREACH;
+    while(s->origin_resolution_current != NULL) {
+        struct addrinfo *addr = s->origin_resolution_current;
+        s->origin_resolution_current = addr->ai_next;
+
+        if(addr->ai_family != AF_INET && addr->ai_family != AF_INET6) {
+            continue;
+        }
+        if(request_connect_sockaddr(key, addr->ai_family, addr->ai_addr,
+                                    addr->ai_addrlen, in_progress, connect_error) == 0) {
+            return 0;
+        }
+    }
+
+    return -1;
+}
+
+static int
+request_marshall_origin_bind(struct socks5 *s, struct request_st *d) {
+    struct sockaddr_storage storage;
+    socklen_t storage_len = sizeof(storage);
+
+    memset(&storage, 0, sizeof(storage));
+    if(getsockname(s->origin_fd, (struct sockaddr *) &storage, &storage_len) == 0) {
+        if(storage.ss_family == AF_INET) {
+            struct sockaddr_in *addr = (struct sockaddr_in *) &storage;
+            uint8_t bind_addr[4];
+
+            memcpy(bind_addr, &addr->sin_addr.s_addr, sizeof(bind_addr));
+            return request_marshall_ipv4(d->wb, d->reply, bind_addr, ntohs(addr->sin_port));
+        }
+        if(storage.ss_family == AF_INET6) {
+            struct sockaddr_in6 *addr = (struct sockaddr_in6 *) &storage;
+            uint8_t bind_addr[16];
+
+            memcpy(bind_addr, &addr->sin6_addr.s6_addr, sizeof(bind_addr));
+            return request_marshall_ipv6(d->wb, d->reply, bind_addr, ntohs(addr->sin6_port));
+        }
+    }
+
+    return request_marshall(d->wb, d->reply);
 }
 
 static unsigned
@@ -509,11 +662,16 @@ request_process(struct selector_key *key, struct request_st *d) {
     if(d->parser.cmd != SOCKS_REQUEST_CMD_CONNECT) {
         return request_set_reply(key, d, SOCKS_REPLY_COMMAND_NOT_SUPPORTED);
     }
-    if(d->parser.atyp != SOCKS_REQUEST_ATYP_IPV4) {
+    if(d->parser.atyp == SOCKS_REQUEST_ATYP_DOMAIN) {
+        return request_start_resolution(key, d);
+    }
+    if(d->parser.atyp != SOCKS_REQUEST_ATYP_IPV4 && d->parser.atyp != SOCKS_REQUEST_ATYP_IPV6) {
         return request_set_reply(key, d, SOCKS_REPLY_ADDRESS_TYPE_NOT_SUPPORTED);
     }
-    if(request_connect_ipv4(key, &d->parser, &in_progress) < 0) {
-        return request_set_reply(key, d, SOCKS_REPLY_GENERAL_FAILURE);
+
+    int connect_error = 0;
+    if(request_connect_ip(key, &d->parser, &in_progress, &connect_error) < 0) {
+        return request_set_reply(key, d, request_reply_for_connect_error(connect_error));
     }
 
     if(in_progress) {
@@ -573,6 +731,33 @@ request_write_close(const unsigned state, struct selector_key *key) {
 }
 
 static unsigned
+resolving(struct selector_key *key) {
+    struct socks5 *s = ATTACHMENT(key);
+    struct request_st *d = &s->client.request;
+    bool in_progress = false;
+    int connect_error = 0;
+
+    if(s->origin_resolution_error != 0 || s->origin_resolution == NULL) {
+        return request_set_reply(key, d, SOCKS_REPLY_HOST_UNREACHABLE);
+    }
+    if(request_connect_next_resolution(key, &in_progress, &connect_error) < 0) {
+        return request_set_reply(key, d, request_reply_for_connect_error(connect_error));
+    }
+    if(in_progress) {
+        return CONNECTING;
+    }
+
+    d->reply = SOCKS_REPLY_SUCCEEDED;
+    if(request_marshall_origin_bind(s, d) < 0) {
+        return ERROR;
+    }
+    if(SELECTOR_SUCCESS != selector_set_interest(key->s, s->client_fd, OP_WRITE)) {
+        return ERROR;
+    }
+    return REQUEST_WRITE;
+}
+
+static unsigned
 connecting(struct selector_key *key) {
     struct socks5 *s = ATTACHMENT(key);
     struct request_st *d = &s->client.request;
@@ -582,9 +767,34 @@ connecting(struct selector_key *key) {
     if(key->fd != s->origin_fd) {
         return CONNECTING;
     }
-    if(getsockopt(s->origin_fd, SOL_SOCKET, SO_ERROR, &error, &len) < 0 || error != 0) {
+    if(getsockopt(s->origin_fd, SOL_SOCKET, SO_ERROR, &error, &len) < 0) {
         selector_set_interest(key->s, s->origin_fd, OP_NOOP);
         return request_set_reply(key, d, SOCKS_REPLY_GENERAL_FAILURE);
+    }
+    if(error != 0) {
+        int failed_fd = s->origin_fd;
+        bool in_progress = false;
+        int connect_error = error;
+
+        selector_unregister_fd(key->s, failed_fd);
+        close(failed_fd);
+        s->origin_fd = -1;
+
+        if(s->origin_resolution_current != NULL
+                && request_connect_next_resolution(key, &in_progress, &connect_error) == 0) {
+            if(in_progress) {
+                return CONNECTING;
+            }
+            d->reply = SOCKS_REPLY_SUCCEEDED;
+            if(request_marshall_origin_bind(s, d) < 0) {
+                return ERROR;
+            }
+            if(SELECTOR_SUCCESS != selector_set_interest(key->s, s->client_fd, OP_WRITE)) {
+                return ERROR;
+            }
+            return REQUEST_WRITE;
+        }
+        return request_set_reply(key, d, request_reply_for_connect_error(connect_error));
     }
 
     d->reply = SOCKS_REPLY_SUCCEEDED;
@@ -756,6 +966,12 @@ static const struct state_definition client_statbl[] = {
         .on_arrival       = request_read_init,
         .on_departure     = request_read_close,
         .on_read_ready    = request_read,
+    },
+    {
+        .state            = RESOLVING,
+        .on_arrival       = NULL,
+        .on_departure     = NULL,
+        .on_block_ready   = resolving,
     },
     {
         .state            = CONNECTING,

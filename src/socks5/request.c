@@ -152,6 +152,16 @@ uint8_t request_reply_for(const struct request_parser *p) {
     return SOCKS_REPLY_GENERAL_FAILURE;
 }
 
+static int request_marshall_bytes(buffer *b, const uint8_t *response, const size_t length) {
+    for(size_t i = 0; i < length; i++) {
+        if(!buffer_can_write(b)) {
+            return -1;
+        }
+        buffer_write(b, response[i]);
+    }
+    return 0;
+}
+
 int request_marshall_ipv4(buffer *b, const uint8_t reply,
                           const uint8_t addr[4], const uint16_t port) {
     const uint8_t response[] = {
@@ -168,13 +178,26 @@ int request_marshall_ipv4(buffer *b, const uint8_t reply,
         return -1;
     }
 
-    for(size_t i = 0; i < sizeof(response); i++) {
-        if(!buffer_can_write(b)) {
-            return -1;
-        }
-        buffer_write(b, response[i]);
+    return request_marshall_bytes(b, response, sizeof(response));
+}
+
+int request_marshall_ipv6(buffer *b, const uint8_t reply,
+                          const uint8_t addr[16], const uint16_t port) {
+    uint8_t response[4 + 16 + 2];
+
+    if(reply > SOCKS_REPLY_ADDRESS_TYPE_NOT_SUPPORTED) {
+        return -1;
     }
-    return 0;
+
+    response[0] = SOCKS_REQUEST_VERSION;
+    response[1] = reply;
+    response[2] = 0x00;
+    response[3] = SOCKS_REQUEST_ATYP_IPV6;
+    memcpy(response + 4, addr, 16);
+    response[20] = (uint8_t) ((port >> 8) & 0xFF);
+    response[21] = (uint8_t) (port & 0xFF);
+
+    return request_marshall_bytes(b, response, sizeof(response));
 }
 
 int request_marshall(buffer *b, const uint8_t reply) {

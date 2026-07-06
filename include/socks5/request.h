@@ -16,6 +16,9 @@
 
 #define SOCKS_REPLY_SUCCEEDED 0x00
 #define SOCKS_REPLY_GENERAL_FAILURE 0x01
+#define SOCKS_REPLY_NETWORK_UNREACHABLE 0x03
+#define SOCKS_REPLY_HOST_UNREACHABLE 0x04
+#define SOCKS_REPLY_CONNECTION_REFUSED 0x05
 #define SOCKS_REPLY_COMMAND_NOT_SUPPORTED 0x07
 #define SOCKS_REPLY_ADDRESS_TYPE_NOT_SUPPORTED 0x08
 
@@ -57,5 +60,8 @@ int request_marshall(buffer *b, const uint8_t reply);
 
 int request_marshall_ipv4(buffer *b, const uint8_t reply,
                           const uint8_t addr[4], const uint16_t port);
+
+int request_marshall_ipv6(buffer *b, const uint8_t reply,
+                          const uint8_t addr[16], const uint16_t port);
 
 #endif
