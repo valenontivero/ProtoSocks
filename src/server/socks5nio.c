@@ -10,6 +10,8 @@
 #include <unistd.h>  // close
 #include <pthread.h>
 #include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 #include <arpa/inet.h>
 
@@ -55,7 +57,11 @@ enum socks_v5state {
 
     REQUEST_READ,
 
+    CONNECTING,
+
     REQUEST_WRITE,
+
+    COPY,
 
     // estados terminales
     DONE,
@@ -198,7 +204,7 @@ socksv5_pool_destroy(void) {
 /** obtiene el struct (socks5 *) desde la llave de selección  */
 #define ATTACHMENT(key) ( (struct socks5 *)(key)->data)
 
-static const struct state_definition client_statbl[6];
+static const struct state_definition client_statbl[8];
 
 /* declaración forward de los handlers de selección de una conexión
  * establecida entre un cliente y el proxy.
@@ -426,14 +432,105 @@ request_read_init(const unsigned state, struct selector_key *key) {
 }
 
 static unsigned
-request_process(struct request_st *d) {
-    unsigned ret = REQUEST_WRITE;
-
-    d->reply = request_reply_for(&d->parser);
+request_set_reply(struct selector_key *key, struct request_st *d, const uint8_t reply) {
+    d->reply = reply;
     if(request_marshall(d->wb, d->reply) < 0) {
-        ret = ERROR;
+        return ERROR;
     }
-    return ret;
+    if(SELECTOR_SUCCESS != selector_set_interest(key->s, ATTACHMENT(key)->client_fd, OP_WRITE)) {
+        return ERROR;
+    }
+    return REQUEST_WRITE;
+}
+
+static int
+request_connect_ipv4(struct selector_key *key, const struct request_parser *p, bool *in_progress) {
+    struct socks5 *s = ATTACHMENT(key);
+    struct sockaddr_in addr;
+    int fd;
+    int ret;
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(p->port);
+    memcpy(&addr.sin_addr.s_addr, p->addr, 4);
+
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if(fd < 0) {
+        return -1;
+    }
+    if(selector_fd_set_nio(fd) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    ret = connect(fd, (struct sockaddr *) &addr, sizeof(addr));
+    if(ret < 0 && errno != EINPROGRESS) {
+        close(fd);
+        return -1;
+    }
+
+    *in_progress = ret < 0;
+    s->origin_fd = fd;
+    s->references++;
+    if(SELECTOR_SUCCESS != selector_register(key->s, fd, &socks5_handler,
+                                             *in_progress ? OP_WRITE : OP_NOOP, s)) {
+        s->references--;
+        s->origin_fd = -1;
+        close(fd);
+        return -1;
+    }
+
+    return 0;
+}
+
+static int
+request_marshall_origin_bind(struct socks5 *s, struct request_st *d) {
+    struct sockaddr_in addr;
+    socklen_t addr_len = sizeof(addr);
+    uint8_t bind_addr[4] = { 0x00, 0x00, 0x00, 0x00 };
+    uint16_t bind_port = 0;
+
+    memset(&addr, 0, sizeof(addr));
+    if(getsockname(s->origin_fd, (struct sockaddr *) &addr, &addr_len) == 0
+            && addr.sin_family == AF_INET) {
+        memcpy(bind_addr, &addr.sin_addr.s_addr, sizeof(bind_addr));
+        bind_port = ntohs(addr.sin_port);
+    }
+
+    return request_marshall_ipv4(d->wb, d->reply, bind_addr, bind_port);
+}
+
+static unsigned
+request_process(struct selector_key *key, struct request_st *d) {
+    struct socks5 *s = ATTACHMENT(key);
+    bool in_progress = false;
+
+    if(d->parser.cmd != SOCKS_REQUEST_CMD_CONNECT) {
+        return request_set_reply(key, d, SOCKS_REPLY_COMMAND_NOT_SUPPORTED);
+    }
+    if(d->parser.atyp != SOCKS_REQUEST_ATYP_IPV4) {
+        return request_set_reply(key, d, SOCKS_REPLY_ADDRESS_TYPE_NOT_SUPPORTED);
+    }
+    if(request_connect_ipv4(key, &d->parser, &in_progress) < 0) {
+        return request_set_reply(key, d, SOCKS_REPLY_GENERAL_FAILURE);
+    }
+
+    if(in_progress) {
+        if(SELECTOR_SUCCESS != selector_set_interest(key->s, s->client_fd, OP_NOOP)) {
+            return ERROR;
+        }
+        return CONNECTING;
+    }
+
+    d->reply = SOCKS_REPLY_SUCCEEDED;
+    if(request_marshall_origin_bind(s, d) < 0) {
+        return ERROR;
+    }
+    if(SELECTOR_SUCCESS != selector_set_interest(key->s, s->client_fd, OP_WRITE)) {
+        return ERROR;
+    }
+    return REQUEST_WRITE;
 }
 
 static unsigned
@@ -452,11 +549,7 @@ request_read(struct selector_key *key) {
         buffer_write_adv(d->rb, n);
         const enum request_state st = request_consume(d->rb, &d->parser, &error);
         if(request_is_done(st, 0)) {
-            if(SELECTOR_SUCCESS == selector_set_interest_key(key, OP_WRITE)) {
-                ret = request_process(d);
-            } else {
-                ret = ERROR;
-            }
+            ret = request_process(key, d);
         }
     } else if(n == 0) {
         ret = ERROR;
@@ -480,8 +573,37 @@ request_write_close(const unsigned state, struct selector_key *key) {
 }
 
 static unsigned
+connecting(struct selector_key *key) {
+    struct socks5 *s = ATTACHMENT(key);
+    struct request_st *d = &s->client.request;
+    int error = 0;
+    socklen_t len = sizeof(error);
+
+    if(key->fd != s->origin_fd) {
+        return CONNECTING;
+    }
+    if(getsockopt(s->origin_fd, SOL_SOCKET, SO_ERROR, &error, &len) < 0 || error != 0) {
+        selector_set_interest(key->s, s->origin_fd, OP_NOOP);
+        return request_set_reply(key, d, SOCKS_REPLY_GENERAL_FAILURE);
+    }
+
+    d->reply = SOCKS_REPLY_SUCCEEDED;
+    if(request_marshall_origin_bind(s, d) < 0) {
+        return ERROR;
+    }
+    if(SELECTOR_SUCCESS != selector_set_interest(key->s, s->origin_fd, OP_NOOP)) {
+        return ERROR;
+    }
+    if(SELECTOR_SUCCESS != selector_set_interest(key->s, s->client_fd, OP_WRITE)) {
+        return ERROR;
+    }
+    return REQUEST_WRITE;
+}
+
+static unsigned
 request_write(struct selector_key *key) {
-    struct request_st *d = &ATTACHMENT(key)->client.request;
+    struct socks5 *s = ATTACHMENT(key);
+    struct request_st *d = &s->client.request;
     unsigned  ret        = REQUEST_WRITE;
     uint8_t  *ptr;
     size_t    count;
@@ -492,7 +614,7 @@ request_write(struct selector_key *key) {
     if(n > 0) {
         buffer_read_adv(d->wb, n);
         if(!buffer_can_read(d->wb)) {
-            ret = DONE;
+            ret = (d->reply == SOCKS_REPLY_SUCCEEDED && s->origin_fd != -1) ? COPY : DONE;
         }
     } else if(n == 0) {
         ret = ERROR;
@@ -501,6 +623,119 @@ request_write(struct selector_key *key) {
     }
 
     return ret;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+// COPY
+////////////////////////////////////////////////////////////////////////////////
+
+static bool
+copy_buffer_can_write(buffer *b) {
+    if(!buffer_can_write(b)) {
+        buffer_compact(b);
+    }
+    return buffer_can_write(b);
+}
+
+static bool
+copy_update_interests(struct selector_key *key) {
+    struct socks5 *s = ATTACHMENT(key);
+    fd_interest client_interest = OP_NOOP;
+    fd_interest origin_interest = OP_NOOP;
+
+    if(s->origin_fd == -1) {
+        return false;
+    }
+
+    if(copy_buffer_can_write(&s->read_buffer)) {
+        client_interest |= OP_READ;
+    }
+    if(buffer_can_read(&s->write_buffer)) {
+        client_interest |= OP_WRITE;
+    }
+    if(copy_buffer_can_write(&s->write_buffer)) {
+        origin_interest |= OP_READ;
+    }
+    if(buffer_can_read(&s->read_buffer)) {
+        origin_interest |= OP_WRITE;
+    }
+
+    return SELECTOR_SUCCESS == selector_set_interest(key->s, s->client_fd, client_interest)
+        && SELECTOR_SUCCESS == selector_set_interest(key->s, s->origin_fd, origin_interest);
+}
+
+static void
+copy_init(const unsigned state, struct selector_key *key) {
+    (void) state;
+    buffer_reset(&ATTACHMENT(key)->write_buffer);
+    copy_update_interests(key);
+}
+
+static unsigned
+copy_read(struct selector_key *key) {
+    struct socks5 *s = ATTACHMENT(key);
+    buffer *b;
+    uint8_t *ptr;
+    size_t count;
+    ssize_t n;
+
+    if(key->fd == s->client_fd) {
+        b = &s->read_buffer;
+    } else if(key->fd == s->origin_fd) {
+        b = &s->write_buffer;
+    } else {
+        return ERROR;
+    }
+
+    if(!copy_buffer_can_write(b)) {
+        return copy_update_interests(key) ? COPY : ERROR;
+    }
+
+    ptr = buffer_write_ptr(b, &count);
+    n = recv(key->fd, ptr, count, 0);
+    if(n > 0) {
+        buffer_write_adv(b, n);
+        return copy_update_interests(key) ? COPY : ERROR;
+    }
+    if(n == 0) {
+        return DONE;
+    }
+    if(errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+        return copy_update_interests(key) ? COPY : ERROR;
+    }
+    return ERROR;
+}
+
+static unsigned
+copy_write(struct selector_key *key) {
+    struct socks5 *s = ATTACHMENT(key);
+    buffer *b;
+    uint8_t *ptr;
+    size_t count;
+    ssize_t n;
+
+    if(key->fd == s->client_fd) {
+        b = &s->write_buffer;
+    } else if(key->fd == s->origin_fd) {
+        b = &s->read_buffer;
+    } else {
+        return ERROR;
+    }
+
+    ptr = buffer_read_ptr(b, &count);
+    n = send(key->fd, ptr, count, MSG_NOSIGNAL);
+    if(n > 0) {
+        buffer_read_adv(b, n);
+        return copy_update_interests(key) ? COPY : ERROR;
+    }
+    if(n == 0) {
+        return ERROR;
+    }
+    if(errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+        return copy_update_interests(key) ? COPY : ERROR;
+    }
+    return ERROR;
 }
 
 static const struct state_definition client_statbl[] = {
@@ -523,10 +758,23 @@ static const struct state_definition client_statbl[] = {
         .on_read_ready    = request_read,
     },
     {
+        .state            = CONNECTING,
+        .on_arrival       = NULL,
+        .on_departure     = NULL,
+        .on_write_ready   = connecting,
+    },
+    {
         .state            = REQUEST_WRITE,
         .on_arrival       = NULL,
         .on_departure     = request_write_close,
         .on_write_ready   = request_write,
+    },
+    {
+        .state            = COPY,
+        .on_arrival       = copy_init,
+        .on_departure     = NULL,
+        .on_read_ready    = copy_read,
+        .on_write_ready   = copy_write,
     },
     {
         .state            = DONE,

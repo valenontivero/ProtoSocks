@@ -55,4 +55,7 @@ uint8_t request_reply_for(const struct request_parser *p);
 
 int request_marshall(buffer *b, const uint8_t reply);
 
+int request_marshall_ipv4(buffer *b, const uint8_t reply,
+                          const uint8_t addr[4], const uint16_t port);
+
 #endif

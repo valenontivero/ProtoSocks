@@ -152,14 +152,16 @@ uint8_t request_reply_for(const struct request_parser *p) {
     return SOCKS_REPLY_GENERAL_FAILURE;
 }
 
-int request_marshall(buffer *b, const uint8_t reply) {
-    static const uint8_t response[] = {
+int request_marshall_ipv4(buffer *b, const uint8_t reply,
+                          const uint8_t addr[4], const uint16_t port) {
+    const uint8_t response[] = {
         SOCKS_REQUEST_VERSION,
-        0x00,
+        reply,
         0x00,
         SOCKS_REQUEST_ATYP_IPV4,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00,
+        addr[0], addr[1], addr[2], addr[3],
+        (uint8_t) ((port >> 8) & 0xFF),
+        (uint8_t) (port & 0xFF),
     };
 
     if(reply > SOCKS_REPLY_ADDRESS_TYPE_NOT_SUPPORTED) {
@@ -170,7 +172,12 @@ int request_marshall(buffer *b, const uint8_t reply) {
         if(!buffer_can_write(b)) {
             return -1;
         }
-        buffer_write(b, i == 1 ? reply : response[i]);
+        buffer_write(b, response[i]);
     }
     return 0;
+}
+
+int request_marshall(buffer *b, const uint8_t reply) {
+    static const uint8_t zero_addr[] = { 0x00, 0x00, 0x00, 0x00 };
+    return request_marshall_ipv4(b, reply, zero_addr, 0);
 }
