@@ -16,6 +16,7 @@
 #include <arpa/inet.h>
 
 #include "hello.h"
+#include "auth.h"
 #include "request.h"
 #include "buffer.h"
 
@@ -54,6 +55,10 @@ enum socks_v5state {
      *   - ERROR        ante cualquier error (IO/parseo)
      */
     HELLO_WRITE,
+
+    AUTH_READ,
+
+    AUTH_WRITE,
 
     REQUEST_READ,
 
@@ -104,6 +109,13 @@ struct hello_st {
     uint8_t               method;
 } ;
 
+/** usado por AUTH_READ, AUTH_WRITE */
+struct auth_st {
+    buffer              *rb, *wb;
+    struct auth_parser   parser;
+    bool                 authorized;
+};
+
 /** usado por REQUEST_READ, REQUEST_WRITE */
 struct request_st {
     buffer                  *rb, *wb;
@@ -146,6 +158,7 @@ struct socks5 {
     /** estados para el client_fd */
     union {
         struct hello_st hello;
+        struct auth_st auth;
         struct request_st request;
         // struct copy       copy;
     } client;
@@ -207,7 +220,7 @@ socksv5_pool_destroy(void) {
 /** obtiene el struct (socks5 *) desde la llave de selección  */
 #define ATTACHMENT(key) ( (struct socks5 *)(key)->data)
 
-static const struct state_definition client_statbl[9];
+static const struct state_definition client_statbl[11];
 
 /* declaración forward de los handlers de selección de una conexión
  * establecida entre un cliente y el proxy.
@@ -315,7 +328,10 @@ static void
 on_hello_method(struct hello_parser *p, const uint8_t method) {
     uint8_t *selected  = p->data;
 
-    if(SOCKS_HELLO_NOAUTHENTICATION_REQUIRED == method) {
+    if(SOCKS_HELLO_USERNAME_PASSWORD == method) {
+       *selected = method;
+    } else if(SOCKS_HELLO_NOAUTHENTICATION_REQUIRED == method
+            && *selected == SOCKS_HELLO_NO_ACCEPTABLE_METHODS) {
        *selected = method;
     }
 }
@@ -372,9 +388,7 @@ static unsigned
 hello_process(const struct hello_st* d) {
     unsigned ret = HELLO_WRITE;
 
-    uint8_t m = d->method;
-    const uint8_t r = (m == SOCKS_HELLO_NO_ACCEPTABLE_METHODS) ? 0xFF : 0x00;
-    if (-1 == hello_marshall(d->wb, r)) {
+    if (-1 == hello_marshall(d->wb, d->method)) {
         ret  = ERROR;
     }
     return ret;
@@ -407,7 +421,7 @@ hello_write(struct selector_key *key) {
             if(d->method == SOCKS_HELLO_NO_ACCEPTABLE_METHODS) {
                 ret = DONE;
             } else if(SELECTOR_SUCCESS == selector_set_interest_key(key, OP_READ)) {
-                ret = REQUEST_READ;
+                ret = (d->method == SOCKS_HELLO_USERNAME_PASSWORD) ? AUTH_READ : REQUEST_READ;
             } else {
                 ret = ERROR;
             }
@@ -417,6 +431,109 @@ hello_write(struct selector_key *key) {
     }
 
     return ret;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// AUTH
+////////////////////////////////////////////////////////////////////////////////
+
+static bool
+auth_validate(const struct auth_parser *p) {
+    static const char username[] = "admin";
+    static const char password[] = "admin";
+
+    return p->username_len == sizeof(username) - 1
+        && p->password_len == sizeof(password) - 1
+        && memcmp(p->username, username, sizeof(username) - 1) == 0
+        && memcmp(p->password, password, sizeof(password) - 1) == 0;
+}
+
+static void
+auth_read_init(const unsigned state, struct selector_key *key) {
+    struct auth_st *d = &ATTACHMENT(key)->client.auth;
+
+    (void) state;
+    d->rb = &(ATTACHMENT(key)->read_buffer);
+    d->wb = &(ATTACHMENT(key)->write_buffer);
+    d->authorized = false;
+    auth_parser_init(&d->parser);
+}
+
+static unsigned
+auth_process(struct auth_st *d) {
+    const uint8_t status = auth_validate(&d->parser)
+                         ? SOCKS_AUTH_STATUS_SUCCESS
+                         : SOCKS_AUTH_STATUS_FAILURE;
+
+    d->authorized = status == SOCKS_AUTH_STATUS_SUCCESS;
+    return auth_marshall(d->wb, status) == 0 ? AUTH_WRITE : ERROR;
+}
+
+static unsigned
+auth_read(struct selector_key *key) {
+    struct auth_st *d = &ATTACHMENT(key)->client.auth;
+    unsigned ret = AUTH_READ;
+    bool error = false;
+    uint8_t *ptr;
+    size_t count;
+    ssize_t n;
+
+    ptr = buffer_write_ptr(d->rb, &count);
+    n = recv(key->fd, ptr, count, 0);
+
+    if(n > 0) {
+        buffer_write_adv(d->rb, n);
+        const enum auth_state st = auth_consume(d->rb, &d->parser, &error);
+        if(auth_is_done(st, 0)) {
+            if(SELECTOR_SUCCESS == selector_set_interest_key(key, OP_WRITE)) {
+                ret = auth_process(d);
+            } else {
+                ret = ERROR;
+            }
+        }
+    } else if(n == 0) {
+        ret = ERROR;
+    } else if(errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+        ret = ERROR;
+    }
+
+    return error ? ERROR : ret;
+}
+
+static unsigned
+auth_write(struct selector_key *key) {
+    struct auth_st *d = &ATTACHMENT(key)->client.auth;
+    unsigned ret = AUTH_WRITE;
+    uint8_t *ptr;
+    size_t count;
+    ssize_t n;
+
+    ptr = buffer_read_ptr(d->wb, &count);
+    n = send(key->fd, ptr, count, MSG_NOSIGNAL);
+    if(n > 0) {
+        buffer_read_adv(d->wb, n);
+        if(!buffer_can_read(d->wb)) {
+            if(!d->authorized) {
+                ret = DONE;
+            } else if(SELECTOR_SUCCESS == selector_set_interest_key(key, OP_READ)) {
+                ret = REQUEST_READ;
+            } else {
+                ret = ERROR;
+            }
+        }
+    } else if(n == 0) {
+        ret = ERROR;
+    } else if(errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+        ret = ERROR;
+    }
+
+    return ret;
+}
+
+static void
+auth_close(const unsigned state, struct selector_key *key) {
+    (void) state;
+    (void) key;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -960,6 +1077,18 @@ static const struct state_definition client_statbl[] = {
         .on_arrival       = NULL,
         .on_departure     = hello_write_close,
         .on_write_ready   = hello_write,
+    },
+    {
+        .state            = AUTH_READ,
+        .on_arrival       = auth_read_init,
+        .on_departure     = auth_close,
+        .on_read_ready    = auth_read,
+    },
+    {
+        .state            = AUTH_WRITE,
+        .on_arrival       = NULL,
+        .on_departure     = auth_close,
+        .on_write_ready   = auth_write,
     },
     {
         .state            = REQUEST_READ,

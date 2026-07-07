@@ -1,6 +1,6 @@
 // Se encarga de entender el primer mensaje que manda el cliente SOCKS5
-// Es el parser del saludo inicial de SOCKS5: consume bytes del cliente, 
-// valida que formen un HELLO correcto, 
+// Es el parser del saludo inicial de SOCKS5: consume bytes del cliente,
+// valida que formen un HELLO correcto,
 // detecta qué métodos de autenticación ofrece y permite armar la respuesta del servidor.
 //
 // Por el estandar del protocolo socks5 el mensaje es de la forma:
@@ -29,6 +29,7 @@
 
 // Métodos de autenticación definidos por el estándar SOCKSv5
 #define SOCKS_HELLO_NOAUTHENTICATION_REQUIRED 0x00
+#define SOCKS_HELLO_USERNAME_PASSWORD 0x02
 #define SOCKS_HELLO_NO_ACCEPTABLE_METHODS 0xFF
 
 // Parser states
@@ -43,13 +44,13 @@ enum hello_state {
 
 struct hello_parser {
     enum hello_state state;
-    
+
     // Internal state storage
     struct parser *parser;
     uint8_t nmethods_remaining;       // Cantidad de métodos que nos quedan por leer (NMETHODS)
 
     // Callback para cuando se lee un método de autenticación del cliente
-    void (*on_authentication_method)(struct hello_parser *p, const uint8_t method);   
+    void (*on_authentication_method)(struct hello_parser *p, const uint8_t method);
     void *data;              // Puntero genérico para guardar el método seleccionado (u otros datos)
 
 };
