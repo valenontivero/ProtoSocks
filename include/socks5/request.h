@@ -9,6 +9,9 @@
 #define SOCKS_REQUEST_VERSION 0x05
 
 #define SOCKS_REQUEST_CMD_CONNECT 0x01
+#define SOCKS_REQUEST_CMD_BIND 0x02
+#define SOCKS_REQUEST_CMD_UDP_ASSOCIATE 0x03
+#define SOCKS_REQUEST_RSV 0x00
 
 #define SOCKS_REQUEST_ATYP_IPV4 0x01
 #define SOCKS_REQUEST_ATYP_DOMAIN 0x03
@@ -46,6 +49,7 @@ struct request_parser {
     uint8_t addr_pos;
     uint8_t port_pos;
     uint16_t port;
+    uint8_t reply;
 };
 
 void request_parser_init(struct request_parser *p);
@@ -55,6 +59,8 @@ enum request_state request_consume(buffer *b, struct request_parser *p, bool *er
 bool request_is_done(const enum request_state state, bool *errored);
 
 uint8_t request_reply_for(const struct request_parser *p);
+
+uint8_t request_error_reply(const struct request_parser *p);
 
 int request_marshall(buffer *b, const uint8_t reply);
 

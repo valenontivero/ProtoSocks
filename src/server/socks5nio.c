@@ -24,6 +24,7 @@
 #include "stm.h"
 #include "socks5nio.h"
 #include "netutils.h"
+#include "user_store.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 
@@ -439,13 +440,8 @@ hello_write(struct selector_key *key) {
 
 static bool
 auth_validate(const struct auth_parser *p) {
-    static const char username[] = "admin";
-    static const char password[] = "admin";
-
-    return p->username_len == sizeof(username) - 1
-        && p->password_len == sizeof(password) - 1
-        && memcmp(p->username, username, sizeof(username) - 1) == 0
-        && memcmp(p->password, password, sizeof(password) - 1) == 0;
+    return user_store_validate(p->username, p->username_len,
+                               p->password, p->password_len);
 }
 
 static void
@@ -825,6 +821,9 @@ request_read(struct selector_key *key) {
         const enum request_state st = request_consume(d->rb, &d->parser, &error);
         if(request_is_done(st, 0)) {
             ret = request_process(key, d);
+        } else if(error) {
+            ret = request_set_reply(key, d, request_error_reply(&d->parser));
+            error = false;
         }
     } else if(n == 0) {
         ret = ERROR;

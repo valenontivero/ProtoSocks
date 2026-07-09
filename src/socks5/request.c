@@ -55,6 +55,7 @@ static uint8_t address_length(const struct request_parser *p) {
 void request_parser_init(struct request_parser *p) {
     memset(p, 0, sizeof(*p));
     p->state = REQUEST_VERSION;
+    p->reply = SOCKS_REPLY_GENERAL_FAILURE;
 }
 
 enum request_state request_consume(buffer *b, struct request_parser *p, bool *errored) {
@@ -64,15 +65,26 @@ enum request_state request_consume(buffer *b, struct request_parser *p, bool *er
         switch(p->state) {
             case REQUEST_VERSION:
                 p->state = (c == SOCKS_REQUEST_VERSION) ? REQUEST_CMD : REQUEST_ERROR;
+                if(p->state == REQUEST_ERROR) {
+                    p->reply = SOCKS_REPLY_GENERAL_FAILURE;
+                }
                 break;
 
             case REQUEST_CMD:
                 p->cmd = c;
+                if(c != SOCKS_REQUEST_CMD_CONNECT
+                        && c != SOCKS_REQUEST_CMD_BIND
+                        && c != SOCKS_REQUEST_CMD_UDP_ASSOCIATE) {
+                    p->reply = SOCKS_REPLY_COMMAND_NOT_SUPPORTED;
+                }
                 p->state = REQUEST_RSV;
                 break;
 
             case REQUEST_RSV:
-                p->state = (c == 0x00) ? REQUEST_ATYP : REQUEST_ERROR;
+                p->state = (c == SOCKS_REQUEST_RSV) ? REQUEST_ATYP : REQUEST_ERROR;
+                if(p->state == REQUEST_ERROR) {
+                    p->reply = SOCKS_REPLY_GENERAL_FAILURE;
+                }
                 break;
 
             case REQUEST_ATYP:
@@ -83,6 +95,7 @@ enum request_state request_consume(buffer *b, struct request_parser *p, bool *er
                     p->state = REQUEST_DST_ADDR;
                     p->domain_len = 0;
                 } else {
+                    p->reply = SOCKS_REPLY_ADDRESS_TYPE_NOT_SUPPORTED;
                     p->state = REQUEST_DONE;
                 }
                 break;
@@ -91,6 +104,7 @@ enum request_state request_consume(buffer *b, struct request_parser *p, bool *er
                 if(p->atyp == SOCKS_REQUEST_ATYP_DOMAIN && p->domain_len == 0) {
                     p->domain_len = c;
                     if(p->domain_len == 0) {
+                        p->reply = SOCKS_REPLY_GENERAL_FAILURE;
                         p->state = REQUEST_ERROR;
                     }
                     break;
@@ -138,6 +152,10 @@ bool request_is_done(const enum request_state state, bool *errored) {
         return false;
     }
     return state == REQUEST_DONE;
+}
+
+uint8_t request_error_reply(const struct request_parser *p) {
+    return p->reply;
 }
 
 uint8_t request_reply_for(const struct request_parser *p) {
