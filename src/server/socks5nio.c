@@ -25,6 +25,7 @@
 #include "socks5nio.h"
 #include "netutils.h"
 #include "user_store.h"
+#include "metrics.h"
 
 #define N(x) (sizeof(x)/sizeof((x)[0]))
 
@@ -195,6 +196,7 @@ socks5_destroy(struct socks5 *s) {
     if(s == NULL) {
         // nada para hacer
     } else if(s->references == 1) {
+        metrics_register_closed_connection();
         if(s != NULL) {
             if(pool_size < max_pool) {
                 s->next = pool;
@@ -260,6 +262,8 @@ static struct socks5 *socks5_new(const int client_fd)
         LOG(LOG_ERROR, "Error allocating memory for new SOCKS5 state");
         return NULL;
     }
+
+    metrics_register_new_connection();
 
     memset(ret, 0x00, sizeof(*ret));
 
@@ -1022,6 +1026,7 @@ copy_read(struct selector_key *key) {
     n = recv(key->fd, ptr, count, 0);
     if(n > 0) {
         buffer_write_adv(b, n);
+        metrics_register_bytes_transferred(n);
         return copy_update_interests(key) ? COPY : ERROR;
     }
     if(n == 0) {

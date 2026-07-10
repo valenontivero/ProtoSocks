@@ -1,5 +1,7 @@
 #ifndef SOCKS5NIO_H
 #define SOCKS5NIO_H
+#include <stdint.h>
+#include <stddef.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 

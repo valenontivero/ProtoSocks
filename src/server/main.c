@@ -26,6 +26,7 @@
 //#include "socks5.h"
 #include "selector.h"
 #include "socks5nio.h"
+#include "monitor.h"
 
 static bool done = false;
 
@@ -63,6 +64,8 @@ main(const int argc, const char **argv) {
     const char       *err_msg = NULL;
     selector_status   ss      = SELECTOR_SUCCESS;
     fd_selector selector      = NULL;
+    // por si falla antes de crear el socket de monitoreo
+    int monitor_server        = -1;
 
     // Ponemos la estructura en cero, para evitar levantar basura.
     struct sockaddr_in addr;
@@ -98,14 +101,45 @@ main(const int argc, const char **argv) {
         goto finally;
     }
 
+    // Creamos el socket pasivo de monitoreo que escucha en el puerto 8080
+    monitor_server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if(monitor_server < 0) {
+        err_msg = "unable to create monitor socket";
+        goto finally;
+    }
+
+    struct sockaddr_in monitor_addr;
+    memset(&monitor_addr, 0, sizeof(monitor_addr));
+    monitor_addr.sin_family      = AF_INET;
+    monitor_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    monitor_addr.sin_port        = htons(8080); // Puerto de monitoreo
+
+    fprintf(stdout, "Listening on TCP port 8080 (monitoring)\n");
+
+    setsockopt(monitor_server, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof(int));
+    if(bind(monitor_server, (struct sockaddr*) &monitor_addr, sizeof(monitor_addr)) < 0) {
+        err_msg = "unable to bind monitor socket";
+        goto finally;
+    }
+
+    if (listen(monitor_server, 20) < 0) {
+        err_msg = "unable to listen monitor";
+        goto finally;
+    }
+
     // Registrar sigterm es útil para terminar el programa normalmente.
     // esto ayuda mucho en herramientas como valgrind.
     signal(SIGTERM, sigterm_handler);
     signal(SIGINT,  sigterm_handler);
 
-    // Poner el socket pasivo en modo no bloqueante 
+    // Poner el socket pasivo del proxy en modo no bloqueante 
     if(selector_fd_set_nio(server) == -1) {
         err_msg = "getting server socket flags";
+        goto finally;
+    }
+    // Poner el socket pasivo de monitoreo en no bloqueante
+    if(selector_fd_set_nio(monitor_server) == -1) {
+        err_msg = "getting monitor socket flags";
         goto finally;
     }
 
@@ -147,6 +181,18 @@ main(const int argc, const char **argv) {
         err_msg = "registering fd";
         goto finally;
     }
+
+    const struct fd_handler monitor_socks = {
+        .handle_read       = monitor_passive_accept,
+        .handle_write      = NULL,
+        .handle_close      = NULL,
+    };
+    ss = selector_register(selector, monitor_server, &monitor_socks, OP_READ, NULL);
+
+    if(ss != SELECTOR_SUCCESS) {
+        err_msg = "registering monitor fd";
+        goto finally;
+    }
     for(;!done;) {
         err_msg = NULL;
         // Loop principal
@@ -182,6 +228,9 @@ finally:
 
     if(server >= 0) {
         close(server);
+    }
+    if(monitor_server >= 0) {
+        close(monitor_server);
     }
     return ret;
 }
