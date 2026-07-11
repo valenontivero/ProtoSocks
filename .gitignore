@@ -7,3 +7,6 @@ obj/*
 *.o
 
 ref/
+
+.idea
+/doc

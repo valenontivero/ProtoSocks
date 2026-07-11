@@ -150,7 +150,7 @@ static void monitor_process_command(struct monitor_client *mc) {
         monitor_write_str(mc, resp);
 
         for(size_t i = 0; i < count; i++) {
-            uint8_t *username;
+            const uint8_t *username;
             size_t username_len;
 
             if(user_store_get_username(i, &username, &username_len)) {

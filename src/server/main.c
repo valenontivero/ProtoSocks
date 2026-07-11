@@ -28,15 +28,24 @@
 #include "selector.h"
 #include "socks5nio.h"
 #include "monitor.h"
+#include "metrics.h"
 #include "args.h"
 #include "user_store.h"
 
-static bool done = false;
+// Pagina 428 de The Linux Programming Interface
+volatile sig_atomic_t shutdown_requested = false;
+volatile sig_atomic_t signal_count = 0;
 
 static void
 sigterm_handler(const int signal) {
     printf("signal %d, cleaning up and exiting\n",signal);
-    done = true;
+    shutdown_requested = true;
+    signal_count++;
+
+    // Forzar salida si recibimos mas de una señal
+    if (signal_count > 1) {
+        exit(1);
+    }
 }
 
 int
@@ -47,8 +56,8 @@ main(const int argc, const char **argv) {
 
     for(size_t i = 0; i < MAX_USERS; i++) {
         if(args.users[i].name != NULL) {
-            user_store_add(args.users[i].name, strlen(args.users[i].name), args.users[i].pass, strlen(args.users[i].pass));
-    }
+            user_store_add((const uint8_t *)args.users[i].name, strlen(args.users[i].name), (const uint8_t *)args.users[i].pass, strlen(args.users[i].pass));
+        }
 }
 
     // no tenemos nada que leer de stdin
@@ -92,6 +101,7 @@ main(const int argc, const char **argv) {
 
     // Configuramos el tamaño de la cola de conexiones
     // Pueden haber 20 conexiones encoladas esperando ser aceptadas
+    // TODO: Ver lo de SOMAXCONN de la pag. 1157 de The Linux Programming Interface para aca
     if (listen(server, 20) < 0) {
         err_msg = "unable to listen";
         goto finally;
@@ -192,9 +202,23 @@ main(const int argc, const char **argv) {
         err_msg = "registering monitor fd";
         goto finally;
     }
-    for(;!done;) {
+
+    bool listening = true;
+
+    // Loop principal
+    for(;;) {
         err_msg = NULL;
-        // Loop principal
+
+        if (shutdown_requested && listening) {
+            listening = false;
+            selector_unregister_fd(selector, server);
+            selector_unregister_fd(selector, monitor_server);
+        }
+
+        if (!listening && get_metrics_concurrent_connections() == 0) {
+            break;
+        }
+
         ss = selector_select(selector);
         if(ss != SELECTOR_SUCCESS) {
             err_msg = "serving";
