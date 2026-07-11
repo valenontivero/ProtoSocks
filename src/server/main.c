@@ -22,6 +22,7 @@
 #include <sys/socket.h>  // socket
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <arpa/inet.h>
 
 //#include "socks5.h"
 #include "selector.h"
@@ -42,6 +43,7 @@ int
 main(const int argc, const char **argv) {
     struct socks5args args;
     parse_args(argc, (char **)argv, &args);
+    monitor_set_token(args.mng_token);
 
     for(size_t i = 0; i < MAX_USERS; i++) {
         if(args.users[i].name != NULL) {
@@ -64,7 +66,10 @@ main(const int argc, const char **argv) {
 
     // Completamos la direccion del servidor: esta parte define donde escucha el servidor
     addr.sin_family      = AF_INET;  // IPv4
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if(inet_pton(AF_INET, args.socks_addr, &addr.sin_addr) <= 0) {
+        err_msg = "invalid SOCKS bind address";
+        goto finally;
+    }
     addr.sin_port        = htons(args.socks_port); // Puerto
 
     // Creamos el socket pasivo
@@ -102,7 +107,10 @@ main(const int argc, const char **argv) {
     struct sockaddr_in monitor_addr;
     memset(&monitor_addr, 0, sizeof(monitor_addr));
     monitor_addr.sin_family      = AF_INET;
-    monitor_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if(inet_pton(AF_INET, args.mng_addr, &monitor_addr.sin_addr) <= 0) {
+        err_msg = "invalid monitor bind address";
+        goto finally;
+    }
     monitor_addr.sin_port        = htons(args.mng_port); // Puerto de monitoreo
 
     fprintf(stdout, "Listening on TCP port %d (monitoring)\n", args.mng_port);

@@ -61,6 +61,7 @@ usage(const char* progname)
             "   -L <conf  addr>  Dirección donde servirá el servicio de management.\n"
             "   -p <SOCKS port>  Puerto entrante conexiones SOCKS.\n"
             "   -P <conf port>   Puerto entrante conexiones configuracion\n"
+            "   -t <token>       Token de autenticación del servicio de management.\n"
             "   -u <name>:<pass> Usuario y contraseña de usuario que puede usar el proxy. Hasta 10.\n"
             "   -v               Imprime información sobre la versión versión y termina.\n"
 
@@ -79,6 +80,7 @@ parse_args(const int argc, char** argv, struct socks5args* args)
 
     args->mng_addr = "127.0.0.1";
     args->mng_port = 8080;
+    args->mng_token = "admin123";
 
     args->disectors_enabled = true;
 
@@ -92,7 +94,7 @@ parse_args(const int argc, char** argv, struct socks5args* args)
             {0, 0, 0, 0}
         };
 
-        c = getopt_long(argc, argv, "hl:L:Np:P:u:v", long_options, &option_index);
+        c = getopt_long(argc, argv, "hl:L:Np:P:t:u:v", long_options, &option_index);
         if (c == -1)
             break;
 
@@ -115,6 +117,9 @@ parse_args(const int argc, char** argv, struct socks5args* args)
             break;
         case 'P':
             args->mng_port = port(optarg);
+            break;
+        case 't':
+            args->mng_token = optarg;
             break;
         case 'u':
             if (nusers >= MAX_USERS)

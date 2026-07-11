@@ -17,8 +17,6 @@
 #define LINE_BUFFER_SIZE 1024
 #define MONITOR_BUFF_SIZE 2048
 
-// hardcodeado para primera version
-const char *monitor_token = "admin123";
 
 // Estructura de cada cliente admin
 struct monitor_client {
@@ -47,6 +45,12 @@ static const struct fd_handler monitor_handler = {
     .handle_write = monitor_write,
     .handle_close = monitor_close,
 };
+
+static const char *monitor_token = "admin123";
+
+void monitor_set_token(const char *token) {
+    monitor_token = token;
+}
 
 static void monitor_write_str(struct monitor_client *mc, const char *str) {
     size_t len = strlen(str);
