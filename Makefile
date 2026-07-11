@@ -34,4 +34,10 @@ clean:
 	rm -rf $(OUTPUT_FOLDER)/*
 	rm -rf $(OBJECTS_FOLDER)/*
 
-.PHONY: all server client clean
+tidy:
+	clang-tidy $(SERVER_SOURCES) $(CLIENT_SOURCES) $(SHARED_SOURCES) -- $(COMPILER_FLAGS)
+
+format:
+	clang-format -i $(SERVER_SOURCES) $(CLIENT_SOURCES) $(SHARED_SOURCES)
+
+.PHONY: all server client clean tidy
