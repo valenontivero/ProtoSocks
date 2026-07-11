@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 
 #include "shared.h"
+#include "args_client.h"
 
 // Lee la respuesta de la conexión 
 static ssize_t read_response(int sock, char *buf, size_t max_len) {
@@ -32,8 +33,11 @@ static ssize_t read_response(int sock, char *buf, size_t max_len) {
     return total;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     printf("Admin Client Interactive Console version %s\n", protosocks_version());
+
+    struct client_args args;
+    parse_client_args(argc, argv, &args);
 
     // Creamos el socket del admin_cliente 
     int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -45,15 +49,15 @@ int main(void) {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(8080); // Puerto de monitoreo
-    if (inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr) <= 0) {
+    addr.sin_port = htons(args.mng_port); // Puerto de monitoreo
+    if (inet_pton(AF_INET, args.mng_addr, &addr.sin_addr) <= 0) {
         perror("Invalid address");
         close(sock);
         return 1;
     }
 
     // El selector detecta este connect y acepta la conexion del socket
-    printf("Connecting to monitor server at 127.0.0.1:8080...\n");
+    printf("Connecting to monitor server at %s:%u...\n", args.mng_addr, args.mng_port);
     if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         perror("Connection failed");
         close(sock);
@@ -62,7 +66,8 @@ int main(void) {
 
 
     // Enviamos autenticacion
-    const char *auth_cmd = "AUTH admin123\n";
+    char auth_cmd[512];
+    snprintf(auth_cmd, sizeof(auth_cmd), "AUTH %s\n", args.token);
     if (send(sock, auth_cmd, strlen(auth_cmd), 0) < 0) {
         perror("Failed to send AUTH command");
         close(sock);
