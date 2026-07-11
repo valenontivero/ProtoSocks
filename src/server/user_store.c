@@ -105,3 +105,24 @@ user_store_count(void) {
     }
     return count;
 }
+
+bool
+user_store_get_username(const size_t index, const uint8_t **username, size_t *username_len) {
+    if(username == NULL || username_len == NULL) {
+        return false;
+    }
+
+    size_t current = 0; //cuenta usuarios activos
+    for(size_t i = 0; i < USER_STORE_MAX_USERS; i++) {
+        if(users[i].used) {
+            if(current == index) {
+                *username = users[i].username;
+                *username_len = users[i].username_len;
+                return true;
+            }
+            current++;
+        }
+    }
+
+    return false;
+}

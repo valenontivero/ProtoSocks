@@ -139,7 +139,23 @@ static void monitor_process_command(struct monitor_client *mc) {
             monitor_write_str(mc, "-ERR Not authenticated\n");
             return;
         }
-        //falta
+        size_t count = user_store_count();
+        char resp[64];
+
+        snprintf(resp, sizeof(resp), "users:%lu\n", (unsigned long) count);
+        monitor_write_str(mc, resp);
+
+        for(size_t i = 0; i < count; i++) {
+            uint8_t *username;
+            size_t username_len;
+
+            if(user_store_get_username(i, &username, &username_len)) {
+                monitor_write_str(mc, (const char *) username);
+                monitor_write_str(mc, "\n");
+            }
+        }
+
+        monitor_write_str(mc, "+OK\n");
     } else {
         if (!mc->authenticated) {
             monitor_write_str(mc, "-ERR Not authenticated\n");

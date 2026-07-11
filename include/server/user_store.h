@@ -18,4 +18,6 @@ bool user_store_remove(const uint8_t *username, size_t username_len);
 
 size_t user_store_count(void);
 
+bool user_store_get_username(size_t index, const uint8_t **username, size_t *username_len);
+
 #endif

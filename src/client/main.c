@@ -84,7 +84,7 @@ int main(void) {
 
     printf("Auth status: %s", resp);
     printf("-----------------------------------------------------------------\n");
-    printf("Valid commands: 'metrics', 'add-user <user> <pass>', 'del-user <user>', 'exit'.\n");
+    printf("Valid commands: 'metrics', 'add-user <user> <pass>', 'del-user <user>', 'list-users', 'exit'.\n");
     printf("-----------------------------------------------------------------\n");
 
     char input[256];
@@ -164,8 +164,23 @@ int main(void) {
                 printf("Failed to receive DEL-USER response\n");
                 break;
             }
+        } else if (strcmp(input, "list-users") == 0) {
+            char *list_cmd = "LIST-USERS\n";
+            
+            if (send(sock, list_cmd, strlen(list_cmd), 0) < 0) {
+                perror("Failed to send LIST-USERS command");
+                break;
+            }
+
+            char list_resp[2048] = {0};
+            if (read_response(sock, list_resp, sizeof(list_resp)) > 0) {
+                printf("%s", list_resp);
+            } else {
+                printf("Failed to receive LIST-USERS response\n");
+                break;
+            }
         } else {
-            printf("Command not recognized. Valid commands 'metrics', 'add-user <user> <pass>', 'del-user <user>', 'exit'\n");
+            printf("Command not recognized. Valid commands 'metrics', 'add-user <user> <pass>', 'del-user <user>', 'list-users', 'exit'\n");
         }
 
     }
