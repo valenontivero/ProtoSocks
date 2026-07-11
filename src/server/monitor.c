@@ -12,6 +12,7 @@
 #include "buffer.h"
 #include "socks5nio.h"
 #include "metrics.h"
+#include "user_store.h"
 
 #define LINE_BUFFER_SIZE 1024
 #define MONITOR_BUFF_SIZE 2048
@@ -94,6 +95,51 @@ static void monitor_process_command(struct monitor_client *mc) {
                      (unsigned long)get_metrics_bytes_transferred());
             monitor_write_str(mc, resp);
         }
+    } else if (strncmp(mc->line_buffer, "ADD-USER ", 9) == 0) {
+        if (!mc->authenticated) {
+            monitor_write_str(mc, "-ERR Not authenticated\n");
+            return;
+        } 
+        char *args = mc->line_buffer + 9;
+        char *username = strtok(args, " ");
+        char *password = strtok(NULL, " ");
+        char *extra = strtok(NULL, " "); //para verificar que no haya mas argumentos
+
+        if (username == NULL || password == NULL || extra != NULL) {
+            monitor_write_str(mc, "-ERR Invalid arguments\n");
+            return;
+        }
+
+        if (user_store_add((uint8_t *) username, strlen(username), (uint8_t *) password, strlen(password))) {
+            monitor_write_str(mc, "+OK\n");
+        } else {
+            monitor_write_str(mc, "-ERR Could not add user\n");
+        }
+        
+    } else if (strncmp(mc->line_buffer, "DEL-USER ", 9) == 0) {
+        if (!mc->authenticated) {
+            monitor_write_str(mc, "-ERR Not authenticated\n");
+            return;
+        }
+        char *args = mc->line_buffer + 9;
+        char *username = strtok(args, " ");
+        char *extra = strtok(NULL, " ");
+
+        if (username == NULL || extra != NULL) {
+            monitor_write_str(mc, "-ERR Invalid arguments\n");
+            return;
+        }
+        if (user_store_remove((uint8_t *) username, strlen(username))) {
+            monitor_write_str(mc, "+OK\n");
+        } else {
+            monitor_write_str(mc, "-ERR Could not remove user\n");
+        }
+    } else if (strcmp(mc->line_buffer, "LIST-USERS") == 0) {
+        if (!mc->authenticated) {
+            monitor_write_str(mc, "-ERR Not authenticated\n");
+            return;
+        }
+        //falta
     } else {
         if (!mc->authenticated) {
             monitor_write_str(mc, "-ERR Not authenticated\n");
