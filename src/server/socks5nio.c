@@ -421,7 +421,11 @@ static unsigned hello_read(struct selector_key *key)
 			}
 		}
 	}
-	else
+	else if (n == 0)
+	{
+		ret = ERROR;
+	}
+	else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
 	{
 		ret = ERROR;
 	}
@@ -481,7 +485,11 @@ static unsigned hello_write(struct selector_key *key)
 			}
 		}
 	}
-	else
+	else if (n == 0)
+	{
+		ret = ERROR;
+	}
+	else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
 	{
 		ret = ERROR;
 	}
