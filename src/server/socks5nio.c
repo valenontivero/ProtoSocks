@@ -21,6 +21,7 @@
 #include "request.h"
 
 #include "metrics.h"
+#include "access_log.h"
 #include "netutils.h"
 #include "selector.h"
 #include "socks5nio.h"
@@ -156,6 +157,11 @@ struct socks5
 
 	/** File descriptor del origen */
 	int origin_fd;
+
+	char username[ACCESS_LOG_MAX_USERNAME + 1];
+	char requested_destination[ACCESS_LOG_MAX_DESTINATION + 1];
+	uint16_t requested_port;
+	bool request_logged;
 
 	/** Maquina de estados */
 	struct state_machine stm;
@@ -293,6 +299,7 @@ static struct socks5 *socks5_new(const int client_fd)
 	ret->origin_fd = -1;
 	ret->client_fd = client_fd;
 	ret->client_addr_len = sizeof(ret->client_addr);
+	snprintf(ret->username, sizeof(ret->username), "-");
 
 	ret->references = 1;
 
@@ -502,11 +509,16 @@ static void auth_read_init(const unsigned state, struct selector_key *key)
 	auth_parser_init(&d->parser);
 }
 
-static unsigned auth_process(struct auth_st *d)
+static unsigned auth_process(struct selector_key *key, struct auth_st *d)
 {
 	const uint8_t status = auth_validate(&d->parser) ? SOCKS_AUTH_STATUS_SUCCESS : SOCKS_AUTH_STATUS_FAILURE;
 
 	d->authorized = status == SOCKS_AUTH_STATUS_SUCCESS;
+	if (d->authorized)
+	{
+		struct socks5 *s = ATTACHMENT(key);
+		snprintf(s->username, sizeof(s->username), "%.*s", (int) d->parser.username_len, d->parser.username);
+	}
 	return auth_marshall(d->wb, status) == 0 ? AUTH_WRITE : ERROR;
 }
 
@@ -530,7 +542,7 @@ static unsigned auth_read(struct selector_key *key)
 		{
 			if (SELECTOR_SUCCESS == selector_set_interest_key(key, OP_WRITE))
 			{
-				ret = auth_process(d);
+				ret = auth_process(key, d);
 			}
 			else
 			{
@@ -614,7 +626,37 @@ static void request_read_init(const unsigned state, struct selector_key *key)
 
 static unsigned request_set_reply(struct selector_key *key, struct request_st *d, const uint8_t reply)
 {
+	struct socks5 *s = ATTACHMENT(key);
+
 	d->reply = reply;
+	if (reply != SOCKS_REPLY_SUCCEEDED && !s->request_logged)
+	{
+		const char *status;
+
+		switch (reply)
+		{
+			case SOCKS_REPLY_COMMAND_NOT_SUPPORTED:
+				status = "COMMAND_NOT_SUPPORTED";
+				break;
+			case SOCKS_REPLY_ADDRESS_TYPE_NOT_SUPPORTED:
+				status = "ADDRESS_TYPE_NOT_SUPPORTED";
+				break;
+			case SOCKS_REPLY_NETWORK_UNREACHABLE:
+				status = "NETWORK_UNREACHABLE";
+				break;
+			case SOCKS_REPLY_HOST_UNREACHABLE:
+				status = "HOST_UNREACHABLE";
+				break;
+			case SOCKS_REPLY_CONNECTION_REFUSED:
+				status = "CONNECTION_REFUSED";
+				break;
+			default:
+				status = "GENERAL_FAILURE";
+				break;
+		}
+		access_log_add(s->username, s->requested_destination, s->requested_port, status);
+		s->request_logged = true;
+	}
 	if (request_marshall(d->wb, d->reply) < 0)
 	{
 		return ERROR;
@@ -624,6 +666,39 @@ static unsigned request_set_reply(struct selector_key *key, struct request_st *d
 		return ERROR;
 	}
 	return REQUEST_WRITE;
+}
+
+static void request_remember_destination(struct socks5 *s, const struct request_parser *p)
+{
+	memset(s->requested_destination, 0, sizeof(s->requested_destination));
+	s->requested_port = p->port;
+	s->request_logged = false;
+
+	if (p->atyp == SOCKS_REQUEST_ATYP_DOMAIN)
+	{
+		snprintf(s->requested_destination, sizeof(s->requested_destination), "%.*s", (int) p->domain_len, p->domain);
+	}
+	else if (p->atyp == SOCKS_REQUEST_ATYP_IPV4)
+	{
+		inet_ntop(AF_INET, p->addr, s->requested_destination, sizeof(s->requested_destination));
+	}
+	else if (p->atyp == SOCKS_REQUEST_ATYP_IPV6)
+	{
+		inet_ntop(AF_INET6, p->addr, s->requested_destination, sizeof(s->requested_destination));
+	}
+	else
+	{
+		snprintf(s->requested_destination, sizeof(s->requested_destination), "-");
+	}
+}
+
+static void request_log_success(struct socks5 *s)
+{
+	if (!s->request_logged)
+	{
+		access_log_add(s->username, s->requested_destination, s->requested_port, "OK");
+		s->request_logged = true;
+	}
 }
 
 struct resolver_args
@@ -852,6 +927,8 @@ static unsigned request_process(struct selector_key *key, struct request_st *d)
 	struct socks5 *s = ATTACHMENT(key);
 	bool in_progress = false;
 
+	request_remember_destination(s, &d->parser);
+
 	if (d->parser.cmd != SOCKS_REQUEST_CMD_CONNECT)
 	{
 		return request_set_reply(key, d, SOCKS_REPLY_COMMAND_NOT_SUPPORTED);
@@ -881,6 +958,7 @@ static unsigned request_process(struct selector_key *key, struct request_st *d)
 	}
 
 	d->reply = SOCKS_REPLY_SUCCEEDED;
+	request_log_success(s);
 	if (request_marshall_origin_bind(s, d) < 0)
 	{
 		return ERROR;
@@ -963,6 +1041,7 @@ static unsigned resolving(struct selector_key *key)
 	}
 
 	d->reply = SOCKS_REPLY_SUCCEEDED;
+	request_log_success(s);
 	if (request_marshall_origin_bind(s, d) < 0)
 	{
 		return ERROR;
@@ -1022,6 +1101,7 @@ static unsigned connecting(struct selector_key *key)
 	}
 
 	d->reply = SOCKS_REPLY_SUCCEEDED;
+	request_log_success(s);
 	if (request_marshall_origin_bind(s, d) < 0)
 	{
 		return ERROR;

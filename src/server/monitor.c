@@ -8,6 +8,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "access_log.h"
 #include "buffer.h"
 #include "metrics.h"
 #include "monitor.h"
@@ -15,7 +16,7 @@
 #include "user_store.h"
 
 #define LINE_BUFFER_SIZE 1024
-#define MONITOR_BUFF_SIZE 2048
+#define MONITOR_BUFF_SIZE 16384 // access log devuelve hasta 32 entradas, aumento buffer hsta 16kb para que no se corte la respuesta
 
 // Estructura de cada cliente admin
 struct monitor_client
@@ -193,6 +194,29 @@ static void monitor_process_command(struct monitor_client *mc)
 			}
 		}
 
+		monitor_write_str(mc, "+OK\n");
+	}
+	else if (strcmp(mc->line_buffer, "ACCESS-LOG") == 0)
+	{
+		if (!mc->authenticated)
+		{
+			monitor_write_str(mc, "-ERR Not authenticated\n");
+			return;
+		}
+
+		struct access_log_entry entries[ACCESS_LOG_MAX_ENTRIES];
+		const size_t count = access_log_copy(entries, ACCESS_LOG_MAX_ENTRIES);
+		char header[64];
+
+		snprintf(header, sizeof(header), "access_log:%lu\n", (unsigned long) count);
+		monitor_write_str(mc, header);
+		for (size_t i = 0; i < count; i++)
+		{
+			char line[512];
+			snprintf(line, sizeof(line), "%s user=%s dst=%s port=%u status=%s\n", entries[i].timestamp,
+					 entries[i].username, entries[i].destination, (unsigned) entries[i].port, entries[i].status);
+			monitor_write_str(mc, line);
+		}
 		monitor_write_str(mc, "+OK\n");
 	}
 	else
