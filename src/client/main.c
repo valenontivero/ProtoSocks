@@ -87,7 +87,7 @@ int main(int argc, char **argv)
 	parse_client_args(argc, argv, &args);
 
 	// Creamos el socket del admin_cliente
-	int sock = socket(AF_INET, SOCK_STREAM, 0);
+	const int sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (sock < 0)
 	{
 		perror("Unable to create socket");

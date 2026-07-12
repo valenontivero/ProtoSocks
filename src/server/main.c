@@ -32,22 +32,14 @@
 #include "socks5nio.h"
 #include "user_store.h"
 
+#define SOMAXCONN_PATH "/proc/sys/net/core/somaxconn"
+
 // Pagina 428 de The Linux Programming Interface
 volatile sig_atomic_t shutdown_requested = false;
 volatile sig_atomic_t signal_count = 0;
 
-static void sigterm_handler(const int signal)
-{
-	printf("signal %d, cleaning up and exiting\n", signal);
-	shutdown_requested = true;
-	signal_count++;
-
-	// Forzar salida si recibimos mas de una señal
-	if (signal_count > 1)
-	{
-		exit(1);
-	}
-}
+static int get_somaxconn(void);
+static void sigterm_handler(const int signal);
 
 int main(const int argc, const char **argv)
 {
@@ -106,10 +98,12 @@ int main(const int argc, const char **argv)
 		goto finally;
 	}
 
-	// Configuramos el tamaño de la cola de conexiones
-	// Pueden haber 20 conexiones encoladas esperando ser aceptadas
-	// TODO: Ver lo de SOMAXCONN de la pag. 1157 de The Linux Programming Interface para aca
-	if (listen(server, 20) < 0)
+	// Configuramos el tamaño de la cola de conexiones.
+	// Leemos el backlog maximo del kernel desde /proc/sys/net/core/somaxconn
+	// (configurable en runtime desde Linux 2.4.25, pag. 1157 de TLPI).
+	const int backlog = get_somaxconn();
+	fprintf(stdout, "Using listen backlog: %d (from %s)\n", backlog, SOMAXCONN_PATH);
+	if (listen(server, backlog) < 0)
 	{
 		err_msg = "unable to listen";
 		goto finally;
@@ -142,7 +136,7 @@ int main(const int argc, const char **argv)
 		goto finally;
 	}
 
-	if (listen(monitor_server, 20) < 0)
+	if (listen(monitor_server, backlog) < 0)
 	{
 		err_msg = "unable to listen monitor";
 		goto finally;
@@ -284,4 +278,40 @@ finally:
 		close(monitor_server);
 	}
 	return ret;
+}
+
+/**
+ * Lee el backlog máximo del kernel desde /proc/sys/net/core/somaxconn.
+ * Disponible y configurable en runtime desde Linux 2.4.25.
+ * Si no se puede leer, retorna SOMAXCONN definida en sys/socket.h
+ * Leer página 1157 que explica porque se pone así
+ */
+static int get_somaxconn(void)
+{
+	FILE *fp = fopen(SOMAXCONN_PATH, "r");
+	if (fp == NULL)
+	{
+		return SOMAXCONN;
+	}
+
+	int value;
+	if (fscanf(fp, "%d", &value) != 1 || value <= 0)
+	{
+		value = SOMAXCONN;
+	}
+	fclose(fp);
+	return value;
+}
+
+static void sigterm_handler(const int signal)
+{
+	printf("signal %d, cleaning up and exiting\n", signal);
+	shutdown_requested = true;
+	signal_count++;
+
+	// Forzar salida si recibimos mas de una señal
+	if (signal_count > 1)
+	{
+		exit(1);
+	}
 }
