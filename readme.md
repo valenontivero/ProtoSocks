@@ -4,16 +4,16 @@ Implementación de un servidor proxy para el protocolo SOCKS v5 ([RFC 1928](http
 
 ## Índice
 ---
-1. [[#Materiales del proyecto]]
-2. [[#Requisitos previos]]
-3. [[#Compilación]]
-4. [[#Artefactos generados]]
-5. [[#Ejecución]]
-	- [[#Servidor SOCKS5]]
-	- [[#Cliente de monitoreo]]
-6. [[#Protocolo de monitoreo]]
-7. [[#Estructura del proyecto]]
-8. [[#Limitaciones]]
+1. [Materiales del proyecto](#materiales-del-proyecto)
+2. [Requisitos previos](#requisitos-previos)
+3. [Compilación](#compilación)
+4. [Artefactos generados](#artefactos-generados)
+5. [Ejecución](#ejecución)
+	- [Servidor SOCKS5](#servidor-socks5)
+	- [Cliente de monitoreo](#cliente-de-monitoreo)
+6. [Protocolo de monitoreo](#protocolo-de-monitoreo)
+7. [Estructura del proyecto](#estructura-del-proyecto)
+8. [Limitaciones](#limitaciones)
 
 ---
 
