@@ -20,8 +20,8 @@
 #include "hello.h"
 #include "request.h"
 
-#include "metrics.h"
 #include "access_log.h"
+#include "metrics.h"
 #include "netutils.h"
 #include "selector.h"
 #include "socks5nio.h"

@@ -3,6 +3,7 @@
 Implementación de un servidor proxy para el protocolo SOCKS v5 ([RFC 1928](https://datatracker.ietf.org/doc/html/rfc1928)) desarrollado en C11 como Trabajo Práctico Especial para la materia **Protocolos de Comunicación** — ITBA, 1er cuatrimestre 2026.
 
 ## Índice
+
 ---
 1. [Materiales del proyecto](#materiales-del-proyecto)
 2. [Requisitos previos](#requisitos-previos)
@@ -15,9 +16,9 @@ Implementación de un servidor proxy para el protocolo SOCKS v5 ([RFC 1928](http
 7. [Estructura del proyecto](#estructura-del-proyecto)
 8. [Limitaciones](#limitaciones)
 
----
 
 ## Materiales del proyecto
+
 ---
 
 | Material | Ubicación |
@@ -32,7 +33,9 @@ Implementación de un servidor proxy para el protocolo SOCKS v5 ([RFC 1928](http
 | Archivos de construcción | `Makefile`, `Makefile.inc` |
 | Binarios generados | `bin/` |
 
+
 ## Requisitos previos
+
 ---
 - **Sistema operativo:** Linux
 - **Compilador:** GCC con soporte para C11
@@ -42,7 +45,9 @@ Implementación de un servidor proxy para el protocolo SOCKS v5 ([RFC 1928](http
 	- clang-format (para make format)
 	- clang-tidy (para make tidy)
 
+
 ## Compilación
+
 ---
 Desde la raíz del proyecto:
 ```bash
@@ -52,7 +57,9 @@ make client     # Compila solo el cliente de monitoreo
 make clean      # Elimina binarios y objetos
 ```
 
+
 ## Artefactos generados
+
 ---
 Luego de ejecutar `make`, los binarios se encuentran en el directorio `bin/`:
 
@@ -61,9 +68,9 @@ Luego de ejecutar `make`, los binarios se encuentran en el directorio `bin/`:
 | `server`  | `bin/server` | Servidor proxy SOCKS v5                        |
 | `client`  | `bin/client` | Cliente interactivo de monitoreo/configuración |
 
----
 
 ## Ejecución
+
 ---
 ### Servidor SOCKS5
 
@@ -97,9 +104,9 @@ Luego de ejecutar `make`, los binarios se encuentran en el directorio `bin/`:
 - `SIGTERM` / `SIGINT`: inicia un apagado controlado (*graceful shutdown*). El servidor deja de aceptar nuevas conexiones y espera a que las activas finalicen.
 - Una segunda señal fuerza la terminación inmediata.
 
----
 
 ### Cliente de monitoreo
+
 ---
 ```bash
 ./bin/client [OPCIONES]
@@ -131,9 +138,9 @@ Luego de ejecutar `make`, los binarios se encuentran en el directorio `bin/`:
 | `list-users` | Lista los usuarios configurados |
 | `exit` | Cierra el cliente |
 
----
 
 ## Protocolo de monitoreo
+
 ---
 El servidor expone un protocolo de monitoreo basado en texto sobre TCP en un puerto independiente del proxy SOCKS. La descripción completa del protocolo se encuentra en el informe (`doc/`).
 
@@ -155,9 +162,9 @@ El servidor expone un protocolo de monitoreo basado en texto sobre TCP en un pue
 | `DEL-USER <user>` | Baja de usuario SOCKS |
 | `LIST-USERS` | Listado de usuarios SOCKS |
 
----
 
 ## Estructura del proyecto
+
 ---
 ```
 ProtoSocks/
@@ -216,7 +223,9 @@ ProtoSocks/
         └── request.c            # Parser de requests SOCKS5
 ```
 
+
 ## Limitaciones
+
 ---
 - **Máximo ~510 conexiones concurrentes:** El selector utiliza `pselect(2)` con `fd_set`, limitado a `FD_SETSIZE` (1024 file descriptors). Como cada conexión SOCKS5 requiere 2 file descriptors (cliente + origen), el máximo teórico es ~510 conexiones simultáneas.
 - **Solo IPv4 para los sockets pasivos del servidor:** Los sockets de escucha (SOCKS y monitoreo) se configuran con `AF_INET`. Las conexiones salientes sí soportan IPv4 e IPv6.

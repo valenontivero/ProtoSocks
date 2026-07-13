@@ -16,7 +16,8 @@
 #include "user_store.h"
 
 #define LINE_BUFFER_SIZE 1024
-#define MONITOR_BUFF_SIZE 16384 // access log devuelve hasta 32 entradas, aumento buffer hsta 16kb para que no se corte la respuesta
+#define MONITOR_BUFF_SIZE                                                                                              \
+	16384 // access log devuelve hasta 32 entradas, aumento buffer hsta 16kb para que no se corte la respuesta
 
 // Estructura de cada cliente admin
 struct monitor_client

@@ -37,6 +37,9 @@ clean:
 tidy:
 	clang-tidy $(SERVER_SOURCES) $(CLIENT_SOURCES) $(SHARED_SOURCES) -- $(COMPILER_FLAGS)
 
+tidy-fix:
+	clang-tidy -fix $(SERVER_SOURCES) $(CLIENT_SOURCES) $(SHARED_SOURCES) -- $(COMPILER_FLAGS)
+
 format:
 	clang-format -i $(SERVER_SOURCES) $(CLIENT_SOURCES) $(SHARED_SOURCES)
 

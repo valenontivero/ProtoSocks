@@ -39,7 +39,7 @@ volatile sig_atomic_t shutdown_requested = false;
 volatile sig_atomic_t signal_count = 0;
 
 static int get_somaxconn(void);
-static void sigterm_handler(const int signal);
+static void sigterm_handler(int signal);
 
 int main(const int argc, const char **argv)
 {
