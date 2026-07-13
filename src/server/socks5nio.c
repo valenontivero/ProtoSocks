@@ -1169,6 +1169,45 @@ static bool copy_buffer_can_write(buffer *b)
 	return buffer_can_write(b);
 }
 
+static bool copy_try_write(struct socks5 *s, const int fd)
+{
+	buffer *b;
+	uint8_t *ptr;
+	size_t count;
+	ssize_t n;
+
+	if (fd == s->client_fd)
+	{
+		b = &s->write_buffer;
+	}
+	else if (fd == s->origin_fd)
+	{
+		b = &s->read_buffer;
+	}
+	else
+	{
+		return false;
+	}
+
+	if (!buffer_can_read(b))
+	{
+		return true;
+	}
+
+	ptr = buffer_read_ptr(b, &count);
+	n = send(fd, ptr, count, MSG_NOSIGNAL);
+	if (n > 0)
+	{
+		buffer_read_adv(b, n);
+		return true;
+	}
+	if (n == 0)
+	{
+		return false;
+	}
+	return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+}
+
 static bool copy_update_interests(struct selector_key *key)
 {
 	struct socks5 *s = ATTACHMENT(key);
@@ -1212,6 +1251,7 @@ static unsigned copy_read(struct selector_key *key)
 {
 	struct socks5 *s = ATTACHMENT(key);
 	buffer *b;
+	int target_fd;
 	uint8_t *ptr;
 	size_t count;
 	ssize_t n;
@@ -1219,10 +1259,12 @@ static unsigned copy_read(struct selector_key *key)
 	if (key->fd == s->client_fd)
 	{
 		b = &s->read_buffer;
+		target_fd = s->origin_fd;
 	}
 	else if (key->fd == s->origin_fd)
 	{
 		b = &s->write_buffer;
+		target_fd = s->client_fd;
 	}
 	else
 	{
@@ -1240,6 +1282,10 @@ static unsigned copy_read(struct selector_key *key)
 	{
 		buffer_write_adv(b, n);
 		metrics_register_bytes_transferred(n);
+		if (!copy_try_write(s, target_fd))
+		{
+			return ERROR;
+		}
 		return copy_update_interests(key) ? COPY : ERROR;
 	}
 	if (n == 0)
@@ -1256,40 +1302,12 @@ static unsigned copy_read(struct selector_key *key)
 static unsigned copy_write(struct selector_key *key)
 {
 	struct socks5 *s = ATTACHMENT(key);
-	buffer *b;
-	uint8_t *ptr;
-	size_t count;
-	ssize_t n;
 
-	if (key->fd == s->client_fd)
-	{
-		b = &s->write_buffer;
-	}
-	else if (key->fd == s->origin_fd)
-	{
-		b = &s->read_buffer;
-	}
-	else
+	if (!copy_try_write(s, key->fd))
 	{
 		return ERROR;
 	}
-
-	ptr = buffer_read_ptr(b, &count);
-	n = send(key->fd, ptr, count, MSG_NOSIGNAL);
-	if (n > 0)
-	{
-		buffer_read_adv(b, n);
-		return copy_update_interests(key) ? COPY : ERROR;
-	}
-	if (n == 0)
-	{
-		return ERROR;
-	}
-	if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
-	{
-		return copy_update_interests(key) ? COPY : ERROR;
-	}
-	return ERROR;
+	return copy_update_interests(key) ? COPY : ERROR;
 }
 
 static const struct state_definition client_statbl[] = {{
