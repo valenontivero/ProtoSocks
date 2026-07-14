@@ -111,9 +111,8 @@ Para los comandos que retornan múltiples datos (listas o métricas), el servido
 
 ---
 1. **Límite Teórico de Concurrencia:** Debido al uso de macros estándar `fd_set` y la función `pselect(2)`, el servidor soporta como máximo ~510 conexiones concurrentes y simultáneas, estando a merced de `FD_SETSIZE = 1024`.
-2. **Volatilidad de las Métricas:** Las métricas (conexiones históricas, bytes transferidos) y el *access log* se guardan exclusivamente en memoria RAM. Al matar el proceso servidor (aún mediante graceful shutdown), esta información se pierde.
-3. **Escalabilidad del Access Log:** El historial de accesos está limitado a un tamaño estático (`ACCESS_LOG_MAX_ENTRIES`) para evitar un consumo desmedido e impredecible de memoria, comportándose como un buffer circular (se sobreescriben los más antiguos).
-4. **Sockets Pasivos solo IPv4:** Si bien el proxy puede hacer conexiones salientes (hacia el *origin server*) tanto en IPv4 como en IPv6, los puertos pasivos de escucha locales del servidor y de administración están fijos en la familia `AF_INET` (IPv4).
+2. **Escalabilidad del Access Log:** El historial de accesos está limitado a un tamaño estático (`ACCESS_LOG_MAX_ENTRIES`) para evitar un consumo desmedido e impredecible de memoria, comportándose como un buffer circular (se sobreescriben los más antiguos).
+3. **Sockets Pasivos solo IPv4:** Si bien el proxy puede hacer conexiones salientes (hacia el *origin server*) tanto en IPv4 como en IPv6, los puertos pasivos de escucha locales del servidor y de administración están fijos en la familia `AF_INET` (IPv4).
 
 
 ## 5. Posibles extensiones
@@ -122,8 +121,6 @@ Para los comandos que retornan múltiples datos (listas o métricas), el servido
 1. **Migración a `epoll(2)`:** Para derribar la limitante artificial de ~510 conexiones impuesta por `pselect(2)` y `FD_SETSIZE`, la arquitectura podría evolucionar a utilizar Linux `epoll`. Esto permitiría escalar a miles de conexiones concurrentes sin pérdida notable de performance.
 2. **Persistencia de Configuración y Métricas:** Dotar al servidor de la capacidad de guardar/restaurar sus métricas y la tabla de usuarios autorizados en un archivo de configuración `.conf` local, en lugar de depender únicamente de los flags en tiempo de arranque.
 3. **Soporte IPv6 pasivo:** Permitir escuchar y recibir conexiones entrantes (clientes SOCKS) desde direcciones IPv6 puras (`AF_INET6`).
-4. **Disectores de Protocolos en Texto Plano:** Como solicita la segunda entrega, añadir la capacidad de leer pasivamente los bytes en el estado `COPY` buscando patrones de autenticación inseguros (ej. POP3) e inyectarlos en el log, funcionando como un sniffer incorporado.
-
 
 ## 6. Conclusiones
 
@@ -204,7 +201,7 @@ Para modificar estos valores, se pueden emplear combinaciones de opciones. Las o
 ---
 ### Levantar el servidor
 
-Ejemplo: Levantar el servidor SOCKS en el puerto alternativo `9090`, el puerto de monitoreo en el `9091` con token seguro, y pre-cargar dos usuarios de entrada:
+Ejemplo: Levantar el servidor SOCKS en el puerto alternativo `9090`, el puerto de monitoreo en él `9091` con token seguro, y pre-cargar dos usuarios de entrada:
 ```bash
 ./bin/server -p 9090 -P 9091 -t "MiTokenSuperSecreto" -u "augusto:clavetest" -u "profesor:12345"
 ```
@@ -267,8 +264,14 @@ El servidor adopta un patrón arquitectónico *Single-threaded Non-blocking I/O 
 
 ### Componentes Clave
 
-1. **El `fd_selector` (Multiplexor):** Es un wrapper escrito sobre `pselect()`. Oculta los detalles sucios del manejo de conjuntos de bits de FDs (`fd_set`). Se le registran descriptores de archivo de interés y devuelve eventos (Read Ready / Write Ready).
+1. **Él `fd_selector` (Multiplexor):** Es un wrapper escrito sobre `pselect()`. Oculta los detalles sucios del manejo de conjuntos de bits de FD (`fd_set`). Se le registran descriptores de archivo de interés y devuelve eventos (Read Ready / Write Ready).
 2. **El Ciclo de Eventos:** Itera infinitamente sobre el selector. Cuando el selector advierte de un cambio en el socket pasivo principal, se invoca `accept()`. Al obtener el descriptor del cliente, este se registra en el selector asociándole un "Handler de Eventos" (`socks5_handler`).
 3. **Máquina de Estados (State Machine FSM):** Cada conexión cliente contiene el struct `socks5` que aloja una `stm`. El hilo principal ejecuta devoluciones de llamada (*callbacks*) en función del estado actual. Un cliente transita `HELLO_READ -> HELLO_WRITE -> AUTH_READ -> AUTH_WRITE -> REQUEST_READ -> RESOLVING -> CONNECTING -> REQUEST_WRITE -> COPY`. Si un estado solo lee partes del mensaje (debido a buffers vacíos/llenos del kernel), guarda su progreso en el *parser* interno y retorna, entregando de vuelta el control al Event Loop para atender al próximo cliente.
 4. **Resolución DNS y Worker Threads:** Dado que `getaddrinfo` detendría todo el Event Loop bloqueando a todos los demás clientes, `socks5nio.c` delega esta única llamada a un *worker thread* en el estado `RESOLVING`. Cuando el thread resuelve el host, interactúa con el selector para emitir un evento especial "Block Ready", que retoma la máquina de estado del cliente y prosigue a conectarse (`CONNECTING`) a la IP remota.
-5. **Subsistema de Management:** Un handler separado pero inserto en el mismo Event Loop general (`monitor_handler`). Comparte el espacio de memoria del servidor, lo que le permite alterar arreglos y leer contadores compartidos (las métricas o `user_store`) con máxima eficiencia sin requerir semáforos ni Mutexes (puesto que todas las escrituras y lecturas las hace iterativamente el mismo y único hilo principal, garantizando aislamiento secuencial).
+5. **Subsistema de Management:** Un handler separado, pero inserto en el mismo Event Loop general (`monitor_handler`). Comparte el espacio de memoria del servidor, lo que le permite alterar arreglos y leer contadores compartidos (las métricas o `user_store`) con máxima eficiencia sin requerir semáforos ni Mutexes (puesto que todas las escrituras y lecturas las hace iterativamente el mismo y único hilo principal, garantizando aislamiento secuencial).
+
+
+## 12. Bibliografía
+
+---
+Usamos principalmente el libro [Kerrisk, M. (2010). The Linux programming interface: A Linux and UNIX system programming handbook. No Starch Press](https://man7.org/tlpi/). Muchas veces citamos directamente qué página usamos para alguna función particular. Al ser el unico libro que usamos, si en algún momento decimos que nos basamos del libro nos estamos refiriendo a este.
