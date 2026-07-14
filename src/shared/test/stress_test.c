@@ -121,6 +121,7 @@ static void * worker(void *arg) {
     int res = 0;
     if (fd >= 0) {
         res = 1;
+        sleep(10);
         close(fd);
     }
     count_result(res);

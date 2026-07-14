@@ -12,9 +12,10 @@ Implementación de un servidor proxy para el protocolo SOCKS v5 ([RFC 1928](http
 5. [Ejecución](#ejecución)
 	- [Servidor SOCKS5](#servidor-socks5)
 	- [Cliente de monitoreo](#cliente-de-monitoreo)
-6. [Protocolo de monitoreo](#protocolo-de-monitoreo)
-7. [Estructura del proyecto](#estructura-del-proyecto)
-8. [Limitaciones](#limitaciones)
+6. [Stress test](#stress-test)
+7. [Protocolo de monitoreo](#protocolo-de-monitoreo)
+8. [Estructura del proyecto](#estructura-del-proyecto)
+9. [Limitaciones](#limitaciones)
 
 
 ## Materiales del proyecto
@@ -54,6 +55,7 @@ Desde la raíz del proyecto:
 make            # Compila servidor y cliente
 make server     # Compila solo el servidor
 make client     # Compila solo el cliente de monitoreo
+make stress_test # Compila el stress test
 make clean      # Elimina binarios y objetos
 ```
 
@@ -67,6 +69,7 @@ Luego de ejecutar `make`, los binarios se encuentran en el directorio `bin/`:
 |-----------|--------------|------------------------------------------------|
 | `server`  | `bin/server` | Servidor proxy SOCKS v5                        |
 | `client`  | `bin/client` | Cliente interactivo de monitoreo/configuración |
+| `stress_test` | `bin/stress_test` | Stress test de conexiones SOCKS5 autenticadas |
 
 
 ## Ejecución
@@ -161,6 +164,63 @@ El servidor expone un protocolo de monitoreo basado en texto sobre TCP en un pue
 | `ADD-USER <user> <pass>` | Alta/modificación de usuario SOCKS     |
 | `DEL-USER <user>`        | Baja de usuario SOCKS                  |
 | `LIST-USERS`             | Listado de usuarios SOCKS              |
+
+
+## Stress test
+
+---
+El proyecto incluye un stress test que abre 500 conexiones SOCKS5 autenticadas contra el proxy y las mantiene activas durante unos segundos para poder observar las métricas de concurrencia.
+
+El límite de file descriptors debe aumentarse en cada terminal porque `ulimit` aplica únicamente al proceso actual y a sus hijos.
+
+### Terminal 1: servidor HTTP de destino
+
+```bash
+ulimit -n 2048
+cd /tmp
+python3 -m http.server 9000
+```
+
+### Terminal 2: servidor SOCKS5
+
+```bash
+cd /path/to/ProtoSocks
+ulimit -n 2048
+make
+./bin/server -l 127.0.0.1 -p 1080 -L 127.0.0.1 -P 8080 -t secreto -u protos:protos
+```
+
+### Terminal 3: stress test
+
+```bash
+cd /path/to/ProtoSocks
+ulimit -n 2048
+make stress_test
+./bin/stress_test
+```
+
+La salida esperada del stress test es:
+
+```text
+success=500 fail=0 total=500
+```
+
+### Terminal 4: métricas durante la prueba
+
+Mientras el stress test está corriendo:
+
+```bash
+cd /path/to/ProtoSocks
+./bin/client -t secreto
+```
+
+Dentro del cliente de monitoreo:
+
+```text
+metrics
+```
+
+Durante la prueba se espera observar `historic_connections:500` y `concurrent_connections` cercano a 500. Al finalizar, `concurrent_connections` debe volver a 0.
 
 
 ## Estructura del proyecto

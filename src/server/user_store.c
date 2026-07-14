@@ -11,15 +11,7 @@ struct user_entry
 	size_t password_len;
 };
 
-static struct user_entry users[USER_STORE_MAX_USERS] = {
-	{
-		.used = true,
-		.username = "admin",
-		.password = "admin",
-		.username_len = 5,
-		.password_len = 5,
-	},
-};
+static struct user_entry users[USER_STORE_MAX_USERS];
 
 static bool valid_field(const uint8_t *value, const size_t len)
 {

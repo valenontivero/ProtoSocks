@@ -47,13 +47,21 @@ int main(const int argc, const char **argv)
 	parse_args(argc, (char **) argv, &args);
 	monitor_set_token(args.mng_token);
 
+	bool has_users = false;
+
 	for (size_t i = 0; i < MAX_USERS; i++)
 	{
 		if (args.users[i].name != NULL)
 		{
+			has_users = true;
 			user_store_add((const uint8_t *) args.users[i].name, strlen(args.users[i].name),
 						   (const uint8_t *) args.users[i].pass, strlen(args.users[i].pass));
 		}
+	}
+
+	if (!has_users)
+	{
+		user_store_add((const uint8_t *) "admin", strlen("admin"), (const uint8_t *) "admin", strlen("admin"));
 	}
 
 	// no tenemos nada que leer de stdin
