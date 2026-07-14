@@ -1,5 +1,12 @@
 # Trabajo Práctico Especial: Servidor Proxy SOCKS v5
 
+### Integrantes
+- Manuel Suñol - 64138 
+- Augusto Felipe Ospal Madeo - 63669
+- Valentín Ontivero - 60034
+- Mateo Stella - 65780
+
+
 ## 1. Índice
 
 ---
@@ -100,10 +107,7 @@ Para los comandos que retornan múltiples datos (listas o métricas), el servido
 - **Gestión de memoria de buffers:** Definir un modelo de *zero-copy* o minimizar copias de buffers entre sockets no bloqueantes fue un desafío. Se adoptó un diseño de buffer circular por cliente y estado (estructuras `raw_buff_a` y `raw_buff_b` asignadas dinámicamente o por un pool de objetos).
 - **Resolución de Nombres No Bloqueante (DNS):** La función POSIX `getaddrinfo()` es intrínsecamente bloqueante. Para no violar el principio de un solo hilo I/O del servidor, la resolución se delegó a *worker threads* con `pthread_create`. Esto introdujo problemas de sincronización, resueltos utilizando `pthread_kill` o señales y notificaciones del selector cuando el hilo termina de resolver.
 - **Techo de `FD_SETSIZE`:** Durante las pruebas iniciales, el uso de la API clásica `pselect(2)` limitaba severamente el servidor a ~500 conexiones (dado que `FD_SETSIZE` por default es 1024, y cada conexión requiere dos FDs).
-- `Problema de acoplamiento de responsabilidades en la recolección de métricas`
-      `El Problema:` Inicialmente, planteamos almacenar las variables globales de contabilidad de estadísticas (como las conexiones históricas o el conteo de bytes leídos) directamente en la máquina de estados del proxy (socks5nio.c). Sin embargo, al momento de querer implementar el comando METRICS en el servidor de monitoreo (monitor.c), nos topamos con un fuerte acoplamiento: el monitor debía conocer la estructura interna del proxy o acceder a variables globales del archivo de SOCKS5, violando la separación de capas y dificultando la mantenibilidad futura si decidíamos modificar el protocolo de control.
-
-      `La Solución:` Decidimos crear un módulo intermedio dedicado únicamente a las estadísticas (metrics.h y metrics.c). En lugar de que socks5nio.c exponga sus variables internas. El proxy simplemente "notifica" eventos mediante una API clara (como metrics_register_new_connection() o metrics_register_bytes_transferred(n)), y el monitor consulta la información mediante getters puros.
+- **Problema de acoplamiento de responsabilidades en la recolección de métricas:** Inicialmente, planteamos almacenar las variables globales de contabilidad de estadísticas (como las conexiones históricas o el conteo de bytes leídos) directamente en la máquina de estados del proxy (socks5nio.c). Sin embargo, al momento de querer implementar el comando METRICS en el servidor de monitoreo (monitor.c), nos topamos con un fuerte acoplamiento: el monitor debía conocer la estructura interna del proxy o acceder a variables globales del archivo de SOCKS5, violando la separación de capas y dificultando la mantenibilidad futura si decidíamos modificar el protocolo de control. Decidimos crear un módulo intermedio dedicado únicamente a las estadísticas (metrics.h y metrics.c). En lugar de que socks5nio.c exponga sus variables internas. El proxy simplemente "notifica" eventos mediante una API clara (como metrics_register_new_connection() o metrics_register_bytes_transferred(n)), y el monitor consulta la información mediante getters puros.
 
 
 
@@ -203,7 +207,7 @@ Para modificar estos valores, se pueden emplear combinaciones de opciones. Las o
 
 Ejemplo: Levantar el servidor SOCKS en el puerto alternativo `9090`, el puerto de monitoreo en él `9091` con token seguro, y pre-cargar dos usuarios de entrada:
 ```bash
-./bin/server -p 9090 -P 9091 -t "MiTokenSuperSecreto" -u "augusto:clavetest" -u "profesor:12345"
+./bin/server -p 9090 -P 9091 -t "MiTokenSuperSecreto" -u "ricardo:clavetest" -u "profesor:12345"
 ```
 
 ### Interacción y monitoreo con el CLI de cliente
@@ -219,7 +223,7 @@ Al abrirse la consola interactiva, el prompt será `admin> `. A continuación, u
 ```
 admin> list-users
 users:2
-augusto
+ricardo
 profesor
 +OK
 ```
@@ -243,7 +247,7 @@ bytes_transferred:40960
 ```
 admin> access-log
 access_log:2
-2026-07-12 18:45:01 user=augusto dst=142.250.190.4 port=443 status=OK
+2026-07-12 18:45:01 user=ricardo dst=142.250.190.4 port=443 status=OK
 2026-07-12 18:45:10 user=profesor dst=93.184.216.34 port=80 status=NETWORK_UNREACHABLE
 +OK
 ```
