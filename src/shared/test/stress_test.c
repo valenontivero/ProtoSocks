@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #define THREADS 500
@@ -111,11 +112,19 @@ static int connect_to_proxy(void) {
 }
 
 
+static void sleep_ms(long milliseconds) {
+    struct timespec ts;
+    ts.tv_sec = milliseconds / 1000;
+    ts.tv_nsec = (milliseconds % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+}
+
+
 static void * worker(void *arg) {
     int id = *(int *)arg;
 
     // reparte conexiones en 200ms [VER]
-    usleep((id % 200) * 1000);
+    sleep_ms(id % 200);
 
     int fd = connect_to_proxy();
     int res = 0;
