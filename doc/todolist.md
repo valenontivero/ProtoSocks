@@ -1,2 +1,0 @@
-- [ ] Ver lo de stress test
-- [ ] Ver que se banque por lo menos 500 clientes
