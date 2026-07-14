@@ -21,17 +21,17 @@ Implementación de un servidor proxy para el protocolo SOCKS v5 ([RFC 1928](http
 
 ---
 
-| Material | Ubicación |
-|---|---|
-| Informe | `doc/` |
-| Consigna | `doc/Consigna TPE 2026C1 - Socks5.pdf` |
-| Código fuente del servidor | `src/server/` |
-| Código fuente del cliente de monitoreo | `src/client/` |
-| Código compartido (selector, buffers, parsers) | `src/shared/` |
-| Parsers del protocolo SOCKS5 | `src/socks5/` |
-| Headers | `include/` |
-| Archivos de construcción | `Makefile`, `Makefile.inc` |
-| Binarios generados | `bin/` |
+| Material                                       | Ubicación                              |
+|------------------------------------------------|----------------------------------------|
+| Informe                                        | `doc/`                                 |
+| Consigna                                       | `doc/Consigna TPE 2026C1 - Socks5.pdf` |
+| Código fuente del servidor                     | `src/server/`                          |
+| Código fuente del cliente de monitoreo         | `src/client/`                          |
+| Código compartido (selector, buffers, parsers) | `src/shared/`                          |
+| Parsers del protocolo SOCKS5                   | `src/socks5/`                          |
+| Headers                                        | `include/`                             |
+| Archivos de construcción                       | `Makefile`, `Makefile.inc`             |
+| Binarios generados                             | `bin/`                                 |
 
 
 ## Requisitos previos
@@ -64,7 +64,7 @@ make clean      # Elimina binarios y objetos
 Luego de ejecutar `make`, los binarios se encuentran en el directorio `bin/`:
 
 | Artefacto | Ubicación    | Descripción                                    |
-| --------- | ------------ | ---------------------------------------------- |
+|-----------|--------------|------------------------------------------------|
 | `server`  | `bin/server` | Servidor proxy SOCKS v5                        |
 | `client`  | `bin/client` | Cliente interactivo de monitoreo/configuración |
 
@@ -80,17 +80,17 @@ Luego de ejecutar `make`, los binarios se encuentran en el directorio `bin/`:
 
 **Opciones:**
 
-| Opción | Descripción | Default |
-|---|---|---|
-| `-h` | Muestra la ayuda y termina | — |
-| `-l <dirección>` | Dirección donde escucha el proxy SOCKS | `0.0.0.0` |
-| `-p <puerto>` | Puerto para conexiones SOCKS | `1080` |
-| `-L <dirección>` | Dirección del servicio de monitoreo | `127.0.0.1` |
-| `-P <puerto>` | Puerto del servicio de monitoreo | `8080` |
-| `-t <token>` | Token de autenticación para monitoreo | `admin123` |
-| `-u <user>:<pass>` | Agrega un usuario SOCKS (hasta 10 vía CLI) | — |
-| `-N` | Deshabilita disectores de protocolo | habilitados |
-| `-v` | Muestra la versión y termina | — |
+| Opción             | Descripción                                | Default     |
+|--------------------|--------------------------------------------|-------------|
+| `-h`               | Muestra la ayuda y termina                 | —           |
+| `-l <dirección>`   | Dirección donde escucha el proxy SOCKS     | `0.0.0.0`   |
+| `-p <puerto>`      | Puerto para conexiones SOCKS               | `1080`      |
+| `-L <dirección>`   | Dirección del servicio de monitoreo        | `127.0.0.1` |
+| `-P <puerto>`      | Puerto del servicio de monitoreo           | `8080`      |
+| `-t <token>`       | Token de autenticación para monitoreo      | `admin123`  |
+| `-u <user>:<pass>` | Agrega un usuario SOCKS (hasta 10 vía CLI) | —           |
+| `-N`               | Deshabilita disectores de protocolo        | habilitados |
+| `-v`               | Muestra la versión y termina               | —           |
 
 **Ejemplo:**
 
@@ -114,12 +114,12 @@ Luego de ejecutar `make`, los binarios se encuentran en el directorio `bin/`:
 
 **Opciones:**
 
-| Opción | Descripción | Default |
-|---|---|---|
+| Opción           | Descripción                         | Default     |
+|------------------|-------------------------------------|-------------|
 | `-L <dirección>` | Dirección del servicio de monitoreo | `127.0.0.1` |
-| `-P <puerto>` | Puerto del servicio de monitoreo | `8080` |
-| `-t <token>` | Token de autenticación | `admin123` |
-| `-h` | Muestra la ayuda y termina | — |
+| `-P <puerto>`    | Puerto del servicio de monitoreo    | `8080`      |
+| `-t <token>`     | Token de autenticación              | `admin123`  |
+| `-h`             | Muestra la ayuda y termina          | —           |
 
 **Ejemplo:**
 ```bash
@@ -128,15 +128,15 @@ Luego de ejecutar `make`, los binarios se encuentran en el directorio `bin/`:
 
 **Comandos disponibles en la consola interactiva:**
 
-| Comando | Descripción |
-|---|---|
-| `help` | Muestra los comandos disponibles |
-| `metrics` | Muestra las métricas del servidor (conexiones históricas, concurrentes, bytes transferidos) |
-| `access-log` | Muestra el registro de accesos recientes |
-| `add-user <user> <pass>` | Agrega o actualiza un usuario de autenticación SOCKS |
-| `del-user <user>` | Elimina un usuario de autenticación SOCKS |
-| `list-users` | Lista los usuarios configurados |
-| `exit` | Cierra el cliente |
+| Comando                  | Descripción                                                                                 |
+|--------------------------|---------------------------------------------------------------------------------------------|
+| `help`                   | Muestra los comandos disponibles                                                            |
+| `metrics`                | Muestra las métricas del servidor (conexiones históricas, concurrentes, bytes transferidos) |
+| `access-log`             | Muestra el registro de accesos recientes                                                    |
+| `add-user <user> <pass>` | Agrega o actualiza un usuario de autenticación SOCKS                                        |
+| `del-user <user>`        | Elimina un usuario de autenticación SOCKS                                                   |
+| `list-users`             | Lista los usuarios configurados                                                             |
+| `exit`                   | Cierra el cliente                                                                           |
 
 
 ## Protocolo de monitoreo
@@ -153,14 +153,14 @@ El servidor expone un protocolo de monitoreo basado en texto sobre TCP en un pue
 
 **Comandos del protocolo:**
 
-| Comando | Descripción |
-|---|---|
-| `AUTH <token>` | Autenticación del cliente de monitoreo |
-| `METRICS` | Consulta de métricas del servidor |
-| `ACCESS-LOG` | Consulta del registro de accesos |
-| `ADD-USER <user> <pass>` | Alta/modificación de usuario SOCKS |
-| `DEL-USER <user>` | Baja de usuario SOCKS |
-| `LIST-USERS` | Listado de usuarios SOCKS |
+| Comando                  | Descripción                            |
+|--------------------------|----------------------------------------|
+| `AUTH <token>`           | Autenticación del cliente de monitoreo |
+| `METRICS`                | Consulta de métricas del servidor      |
+| `ACCESS-LOG`             | Consulta del registro de accesos       |
+| `ADD-USER <user> <pass>` | Alta/modificación de usuario SOCKS     |
+| `DEL-USER <user>`        | Baja de usuario SOCKS                  |
+| `LIST-USERS`             | Listado de usuarios SOCKS              |
 
 
 ## Estructura del proyecto
